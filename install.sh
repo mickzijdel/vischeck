@@ -18,7 +18,7 @@ chmod +x "$HOOKS_DIR/screenshot-reminder.sh"
 
 echo "==> Installing screenshot skill to $SKILLS_DIR"
 mkdir -p "$SKILLS_DIR"
-curl -fsSL "$REPO/skill.md" -o "$SKILLS_DIR/skill.md"
+curl -fsSL "$REPO/SKILL.md" -o "$SKILLS_DIR/SKILL.md"
 
 echo ""
 echo "Done! Two remaining manual steps:"

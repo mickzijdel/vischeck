@@ -8,7 +8,7 @@ Authenticated screenshot CLI for Claude Code dev workflows. Takes screenshots of
 |------|---------|
 | `screenshot` | Python CLI — takes authenticated screenshots via Playwright |
 | `screenshot-reminder.sh` | Claude Code PostToolUse hook — suggests screenshots after view edits |
-| `skill.md` | Claude Code skill — full instructions + framework dev auth snippets |
+| `SKILL.md` | Claude Code skill — full instructions + framework dev auth snippets |
 | `install.sh` | One-liner installer |
 | `settings-snippet.json` | Hook entry to add to `~/.claude/settings.json` |
 
@@ -151,11 +151,11 @@ After every `Write` or `Edit` tool call on a view/template file, the hook remind
 
 ## Claude Code skill
 
-The `skill.md` file installs as a Claude Code skill under `~/.claude/skills/screenshot/`. Claude will use it when verifying UI changes. To install manually:
+The `SKILL.md` file installs as a Claude Code skill under `~/.claude/skills/screenshot/`. Claude will use it when verifying UI changes. To install manually:
 
 ```bash
 mkdir -p ~/.claude/skills/screenshot
-cp skill.md ~/.claude/skills/screenshot/skill.md
+cp SKILL.md ~/.claude/skills/screenshot/SKILL.md
 ```
 
 ## Dark / light mode
