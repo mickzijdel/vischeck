@@ -41,6 +41,6 @@ if echo "$NEW_CONTENT" | grep -qiE 'form_with|form_for|form_tag|<form|<input|<bu
 fi
 
 cat <<JSON
-{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"You edited a view/template file. Invoke the verifier-screenshot skill via the Skill tool (Skill(verifier-screenshot)) to visually verify the change.${DARK_MODE_NOTE}${INTERACTIVE_NOTE}"}}
+{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"You edited a view/template file. Invoke the vischeck:verify skill via the Skill tool (Skill(vischeck:verify)) to visually verify the change.${DARK_MODE_NOTE}${INTERACTIVE_NOTE}"}}
 JSON
 exit 0

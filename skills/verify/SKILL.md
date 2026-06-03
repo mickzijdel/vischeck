@@ -1,6 +1,6 @@
 ---
-name: screenshot
-description: Take authenticated screenshots of a local dev server and visually verify UI changes. Use after editing any view, template, component, or layout file.
+name: verify
+description: Visually verify UI changes by taking authenticated screenshots of the local dev server. Use after editing any view, template, component, or layout file.
 ---
 
 # Screenshot Skill
