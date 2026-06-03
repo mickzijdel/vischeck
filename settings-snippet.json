@@ -1,0 +1,10 @@
+{
+  "_comment": "Add this object to the PostToolUse array in ~/.claude/settings.json",
+  "matcher": "Write|Edit",
+  "hooks": [
+    {
+      "type": "command",
+      "command": "$HOME/.claude/hooks/screenshot-reminder.sh"
+    }
+  ]
+}

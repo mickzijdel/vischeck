@@ -1,0 +1,48 @@
+#!/bin/bash
+# PostToolUse hook: suggests screenshots after editing view/template files.
+
+INPUT=$(cat)
+FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
+NEW_CONTENT=$(echo "$INPUT" | jq -r '.tool_input.new_string // .tool_input.content // empty')
+
+IS_VIEW=false
+
+case "$FILE_PATH" in
+  *.erb|*.html.haml|*.html.slim|*.html|*.htm|*.jsx|*.tsx|*.vue|*.svelte)
+    IS_VIEW=true ;;
+  *.hbs|*.handlebars|*.ejs|*.pug|*.jade|*.njk|*.mustache|*.liquid|*.blade.php|*.twig)
+    IS_VIEW=true ;;
+esac
+
+if [ "$IS_VIEW" = false ]; then
+  case "$FILE_PATH" in
+    */views/*|*/templates/*|*/components/*|*/pages/*|*/layouts/*|*/partials/*)
+      IS_VIEW=true ;;
+    */app/javascript/controllers/*)
+      IS_VIEW=true ;;
+  esac
+fi
+
+[ "$IS_VIEW" = false ] && exit 0
+
+# Check CLAUDE.md for dark/light mode mentions
+DARK_MODE_NOTE=""
+PROJECT_CLAUDE_MD="$(pwd)/CLAUDE.md"
+if [ -f "$PROJECT_CLAUDE_MD" ]; then
+  if grep -qiE 'dark.?mode|light.?mode|color.?scheme|colour.?scheme' "$PROJECT_CLAUDE_MD"; then
+    DARK_MODE_NOTE=" This project has dark/light mode support documented in CLAUDE.md — consider taking screenshots in both color schemes."
+  else
+    DARK_MODE_NOTE=" CLAUDE.md doesn't mention dark/light mode — if this project supports it, consider adding a note (e.g. \`## UI: This app supports dark mode and light mode\`)."
+  fi
+fi
+
+# Check for interactive elements
+INTERACTIVE_NOTE=""
+if echo "$NEW_CONTENT" | grep -qiE 'form_with|form_for|form_tag|<form|<input|<button|<select|<textarea|submit|text_field|email_field|password_field|check_box|radio_button|select_tag|data-action|onClick|onSubmit|@click|@submit|v-on:|handleSubmit'; then
+  INTERACTIVE_NOTE=" This edit includes interactive elements — consider testing the interaction with playwright-cli too."
+fi
+
+cat <<JSON
+{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"You edited a view/template file. Consider taking a screenshot with \`screenshot <path>\` and using the Read tool to check it visually.${DARK_MODE_NOTE}${INTERACTIVE_NOTE}"}}
+JSON
+exit 0
