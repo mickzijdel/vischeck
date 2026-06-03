@@ -10,17 +10,22 @@ Usage:
   screenshot /admin/users -o tmp/screenshots/custom.png
   screenshot /dashboard --port 8000 --auth-url "/dev-login?token=secret&next={path}"
 
-The script authenticates via a dev auth bypass route, navigates to the
-target page, and saves a screenshot to tmp/screenshots/ in the current
-working directory.
+The script auto-detects whether the page needs authentication: it probes the
+target first, and only routes through the dev auth bypass route if the target
+redirects to a login page or returns 401/403. Screenshots are saved to
+tmp/screenshots/ in the current working directory. It exits non-zero (while
+still saving the image for inspection) if the captured page is an HTTP error
+or an unresolved auth wall, so a bad capture is never reported as success.
 """
 
 import argparse
 import os
+import re
 import socket
 import sys
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 def check_server(host, port):
@@ -30,6 +35,26 @@ def check_server(host, port):
         return True
     except (socket.timeout, ConnectionRefusedError, OSError):
         return False
+
+
+def norm(url_or_path):
+    """Path component, with trailing slash and query/fragment stripped."""
+    return urlparse(url_or_path).path.rstrip("/")
+
+
+LOGIN_RE = re.compile(r"(login|signin|sign_in|session|/auth/)", re.IGNORECASE)
+
+
+def looks_like_login(url):
+    """Soft heuristic used ONLY to phrase warning messages, never for control flow."""
+    return bool(LOGIN_RE.search(urlparse(url).path))
+
+
+def navigate(page, url):
+    """Navigate and return (status, final_url). status is None for same-document navs."""
+    resp = page.goto(url, wait_until="networkidle", timeout=15000)
+    status = resp.status if resp else None
+    return status, page.url
 
 
 def main():
@@ -81,12 +106,15 @@ def main():
         sys.exit(1)
 
     target = args.path if args.path.startswith("/") else f"/{args.path}"
+    target_url = f"{base_url}{target}"
+    auth_path = args.auth_url.format(token=token, path=target)
+    auth_url = f"{base_url}{auth_path}"
 
-    if args.no_auth:
-        nav_url = f"{base_url}{target}"
-    else:
-        auth_path = args.auth_url.format(token=token, path=target)
-        nav_url = f"{base_url}{auth_path}"
+    def is_status_error(status):
+        return status is not None and status >= 400
+
+    def on_target(status, final_url):
+        return not is_status_error(status) and norm(final_url) == norm(target)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -96,12 +124,66 @@ def main():
         )
         page = context.new_page()
 
+        exit_code = 0
         try:
-            page.goto(nav_url, wait_until="networkidle", timeout=15000)
+            if args.no_auth:
+                # Explicit override: navigate the target directly, no auth dance.
+                status, final_url = navigate(page, target_url)
+            else:
+                # Auto-detect: probe the target WITHOUT auth first. For public pages
+                # this single navigation is also the one we screenshot.
+                status, final_url = navigate(page, target_url)
+
+                redirected_away = norm(final_url) != norm(target)
+                auth_required = status in (401, 403) or redirected_away
+
+                if on_target(status, final_url):
+                    print(f"NOTE: captured {target} (no auth needed)", file=sys.stderr)
+                elif not auth_required:
+                    # Stayed on the target but it returned a non-auth error (404, 500…).
+                    # Not an auth wall — let the final check report the HTTP error.
+                    pass
+                else:
+                    # Auth appears required. Attempt the auth bypass route.
+                    status, final_url = navigate(page, auth_url)
+
+                    if status == 404 and norm(final_url) == norm(auth_path):
+                        # The auth route itself doesn't exist.
+                        print(
+                            f"ERROR: {target} requires auth but the auth route "
+                            f"{norm(auth_path)} returned 404.\n"
+                            f"       Run the vischeck:setup-auth skill to add a dev auth "
+                            f"route, or pass --no-auth if this page is meant to be public.",
+                            file=sys.stderr,
+                        )
+                        exit_code = 1
+                    elif on_target(status, final_url):
+                        print(f"NOTE: captured {target} (authenticated)", file=sys.stderr)
+                    else:
+                        # Still not on target after authenticating.
+                        hint = (
+                            " (looks like a login page)" if looks_like_login(final_url) else ""
+                        )
+                        print(
+                            f"WARNING: still redirected to {final_url}{hint} after "
+                            f"authenticating — the token may be wrong or the auth route "
+                            f"broken. Try the vischeck:setup-auth skill.",
+                            file=sys.stderr,
+                        )
+                        exit_code = 1
         except Exception as e:
             print(f"ERROR: Navigation failed: {e}", file=sys.stderr)
             browser.close()
             sys.exit(1)
+
+        # Final check: never report a clean success for an HTTP error page.
+        if is_status_error(status) and exit_code == 0:
+            print(
+                f"ERROR: {final_url} returned HTTP {status} — screenshot saved for "
+                f"inspection but the capture is not a healthy page.",
+                file=sys.stderr,
+            )
+            exit_code = 1
 
         page.wait_for_timeout(args.wait)
         page.screenshot(path=str(output_path), full_page=args.full_page)
@@ -109,6 +191,7 @@ def main():
 
     # Print path so Claude Code can Read the image
     print(str(output_path))
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

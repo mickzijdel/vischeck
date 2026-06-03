@@ -13,7 +13,11 @@ After editing any view, template, component, or layout file:
 1. Take a screenshot and Read the image to check it visually
 2. For interactive elements (forms, buttons, inputs), also test the interaction with playwright-cli
 
-If `screenshot` redirects to a login page, invoke `Skill(vischeck:setup-auth)` first.
+`screenshot` auto-detects whether the page needs auth — no flag required for public pages.
+It exits non-zero (while still saving the image) when the capture is an HTTP error or an
+unresolved auth wall, and prints what happened to stderr. If it reports that the page requires
+auth but the auth route returned 404, invoke `Skill(vischeck:setup-auth)` to add the dev auth
+route, then retry.
 
 ## Dark / light mode
 
