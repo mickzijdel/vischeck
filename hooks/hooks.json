@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "vischeck-hook"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/bin/vischeck-hook\""
           }
         ]
       }
