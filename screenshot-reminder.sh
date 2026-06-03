@@ -28,12 +28,10 @@ fi
 # Check CLAUDE.md for dark/light mode mentions
 DARK_MODE_NOTE=""
 PROJECT_CLAUDE_MD="$(pwd)/CLAUDE.md"
-if [ -f "$PROJECT_CLAUDE_MD" ]; then
-  if grep -qiE 'dark.?mode|light.?mode|color.?scheme|colour.?scheme' "$PROJECT_CLAUDE_MD"; then
-    DARK_MODE_NOTE=" This project has dark/light mode support documented in CLAUDE.md — consider taking screenshots in both color schemes."
-  else
-    DARK_MODE_NOTE=" CLAUDE.md doesn't mention dark/light mode — if this project supports it, consider adding a note (e.g. \`## UI: This app supports dark mode and light mode\`)."
-  fi
+if [ -f "$PROJECT_CLAUDE_MD" ] && grep -qiE 'dark.?mode|light.?mode|color.?scheme|colour.?scheme' "$PROJECT_CLAUDE_MD"; then
+  DARK_MODE_NOTE=" This project has dark/light mode support documented in CLAUDE.md — consider taking screenshots in both color schemes."
+else
+  DARK_MODE_NOTE=" CLAUDE.md doesn't mention dark/light mode — if this project supports it, consider adding a note (e.g. \`## UI: This app supports dark mode and light mode\`)."
 fi
 
 # Check for interactive elements
