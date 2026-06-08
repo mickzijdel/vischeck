@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pyyaml"]
+# ///
 """
 Multi-page (batch) screenshot tool for a local development server.
 
@@ -52,6 +56,7 @@ tmp/screenshots/batch_<timestamp>/ in the current working directory.
 
 import argparse
 import html
+import shutil
 import socket
 import subprocess
 import sys
@@ -194,8 +199,10 @@ def build_command(screenshot_script, entry, output_path, args, globals_dict):
     port = args.port if args.port is not None else globals_dict.get("port", DEFAULT_PORT)
     auth_url = resolve(entry, "auth_url", args.auth_url, globals_dict.get("auth_url"), DEFAULT_AUTH_URL)
 
+    # Invoke through `uv run --script` so the sibling resolves its OWN PEP 723
+    # deps (playwright) — not this script's interpreter, which lacks them.
     cmd = [
-        sys.executable, str(screenshot_script), entry["path"],
+        "uv", "run", "--script", str(screenshot_script), entry["path"],
         "-o", str(output_path),
         "--host", args.host,
         "--port", str(port),
@@ -342,6 +349,14 @@ def main():
     screenshot_script = find_sibling_screenshot()
     if not screenshot_script.exists():
         print(f"ERROR: sibling screenshot tool not found at {screenshot_script}", file=sys.stderr)
+        sys.exit(1)
+
+    if shutil.which("uv") is None:
+        print(
+            "ERROR: `uv` is required to run the per-page screenshot tool but was not "
+            "found on PATH.\n       Install it from https://docs.astral.sh/uv/",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # --- Resolve which pages to capture ------------------------------------

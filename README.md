@@ -18,8 +18,11 @@ A Claude Code plugin for visual verification of UI changes. Bundles a screenshot
 /plugin install github:mickzijdel/vischeck
 ```
 
-**Prerequisite:** `pip install playwright && playwright install chromium`
-(`pip install pyyaml` too if you want to drive the multi-page tool from a `screenshots.yml`)
+**Prerequisite:** [`uv`](https://docs.astral.sh/uv/). The `bin/` scripts use [PEP 723 inline script metadata](https://peps.python.org/pep-0723/), so `uv` installs their Python dependencies (`playwright`, `pyyaml`) automatically on first run — no `pip install` or virtualenv needed. Playwright's browser binary is a one-time download:
+
+```bash
+uvx playwright install chromium
+```
 
 ## Usage
 
