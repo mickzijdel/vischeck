@@ -1,0 +1,426 @@
+#!/usr/bin/env python3
+"""
+Multi-page (batch) screenshot tool for a local development server.
+
+This is a thin batch wrapper around the single-page `screenshot` CLI (its
+sibling in this directory). It captures a consistent *list* of pages in one go
+so Claude can re-screenshot the same set repeatedly while iterating, or grab
+several affected pages at once. Every page is captured by invoking `screenshot`
+as a subprocess, so all of its smart behaviour — auto-detecting whether a page
+needs auth, HTTP-error handling, dark mode, full-page, custom auth URLs, and
+non-zero exit on a bad capture — applies identically here, with no duplication.
+
+Usage:
+  screenshots                     # use ./screenshots.yml (auto-discovered)
+  screenshots / /dashboard /news  # capture exactly these paths (ignores yml)
+  screenshots --config pages.yml  # explicit config file
+  screenshots --dark              # global default: dark scheme for all pages
+
+Page resolution precedence:
+  1. Positional CLI paths always win.
+  2. Else --config <path> if given, else the first existing of
+     screenshots.yml / .screenshots.yml / config/screenshots.yml in the cwd.
+  3. Else: print the expected config format and exit non-zero (no guessed list).
+
+config/screenshots.yml format:
+  # optional global defaults (CLI flags override these for ALL pages)
+  port: 3000
+  dark: false
+  width: 1280
+  height: 720
+  full_page: false
+  no_auth: false
+  auth_url: "/dev_auth/login?token={token}&redirect_to={path}"
+  pages:
+    - /                     # string form
+    - /dashboard
+    - path: /dashboard      # mapping form with per-entry overrides
+      dark: true
+    - path: /mobile
+      width: 375
+      height: 812
+      full_page: true
+      no_auth: true
+
+Each page entry may be a plain path string or a mapping with per-entry overrides
+(path, dark, full_page, width, height, no_auth, auth_url) that take precedence
+over the global defaults.
+
+Output: all images plus an index.html grid land in
+tmp/screenshots/batch_<timestamp>/ in the current working directory.
+"""
+
+import argparse
+import html
+import socket
+import subprocess
+import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from pathlib import Path
+
+# PyYAML is only needed when reading a config file; CLI paths work without it.
+try:
+    import yaml
+    HAS_YAML = True
+except ImportError:
+    HAS_YAML = False
+
+DEFAULT_HOST = "localhost"
+DEFAULT_PORT = 3000
+DEFAULT_WIDTH = 1280
+DEFAULT_HEIGHT = 720
+DEFAULT_WAIT_MS = 1500
+DEFAULT_AUTH_URL = "/dev_auth/login?token={token}&redirect_to={path}"
+
+CONFIG_CANDIDATES = ["screenshots.yml", ".screenshots.yml", "config/screenshots.yml"]
+
+CONFIG_FORMAT_HELP = """\
+No paths given and no config file found.
+
+Either pass paths directly:
+    screenshots / /dashboard /news
+
+or create a screenshots.yml in this directory:
+
+    pages:
+      - /
+      - /dashboard
+      - path: /dashboard      # mapping form with per-entry overrides
+        dark: true
+      - path: /mobile
+        width: 375
+        height: 812
+
+Searched for: {candidates}
+"""
+
+# Per-entry override keys (everything except 'path').
+ENTRY_KEYS = ("dark", "full_page", "width", "height", "no_auth", "auth_url")
+
+
+def find_sibling_screenshot():
+    """Absolute path to the single-page `screenshot` script next to this one."""
+    return Path(__file__).resolve().parent / "screenshot"
+
+
+def discover_config(explicit):
+    """Return the config Path to use, or None. Honours an explicit --config."""
+    if explicit:
+        return Path(explicit)
+    cwd = Path.cwd()
+    for name in CONFIG_CANDIDATES:
+        candidate = cwd / name
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def load_config(config_path):
+    """
+    Parse a screenshots.yml. Returns (globals_dict, entries) where entries is a
+    list of dicts each having at least 'path'. Exits non-zero on real problems
+    (missing PyYAML, malformed file) rather than silently falling back.
+    """
+    if not HAS_YAML:
+        print(
+            f"ERROR: {config_path} exists but PyYAML is not installed.\n"
+            f"       Install it with: pip install pyyaml\n"
+            f"       (or pass paths directly: screenshots / /dashboard)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    with open(config_path) as f:
+        data = yaml.safe_load(f)
+
+    if not data or "pages" not in data or not data["pages"]:
+        print(
+            f"ERROR: {config_path} has no 'pages:' list. See the format in "
+            f"`screenshots --help`.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    globals_dict = {k: data[k] for k in ("port",) + ENTRY_KEYS if k in data}
+
+    entries = []
+    for raw in data["pages"]:
+        if isinstance(raw, str):
+            entries.append({"path": raw})
+        elif isinstance(raw, dict) and "path" in raw:
+            entry = {"path": str(raw["path"])}
+            for k in ENTRY_KEYS:
+                if k in raw:
+                    entry[k] = raw[k]
+            entries.append(entry)
+        else:
+            print(
+                f"ERROR: invalid page entry in {config_path}: {raw!r}\n"
+                f"       Each entry must be a path string or a mapping with a "
+                f"'path:' key.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    return globals_dict, entries
+
+
+def path_to_filename(path, dark):
+    """Convert a URL path to a safe filename. Dark variants get a _dark suffix."""
+    safe = path.strip("/").replace("/", "__") or "home"
+    suffix = "_dark" if dark else ""
+    return f"{safe}{suffix}.png"
+
+
+def resolve(entry, key, cli_value, global_value, default):
+    """Resolve one option: per-entry override > CLI flag > config global > default."""
+    if key in entry:
+        return entry[key]
+    if cli_value is not None:
+        return cli_value
+    if global_value is not None:
+        return global_value
+    return default
+
+
+def build_command(screenshot_script, entry, output_path, args, globals_dict):
+    """Build the argv to invoke the single-page `screenshot` tool for one entry."""
+    dark = resolve(entry, "dark", True if args.dark else None, globals_dict.get("dark"), False)
+    full_page = resolve(entry, "full_page", True if args.full_page else None, globals_dict.get("full_page"), False)
+    no_auth = resolve(entry, "no_auth", True if args.no_auth else None, globals_dict.get("no_auth"), False)
+    width = resolve(entry, "width", args.width, globals_dict.get("width"), DEFAULT_WIDTH)
+    height = resolve(entry, "height", args.height, globals_dict.get("height"), DEFAULT_HEIGHT)
+    port = args.port if args.port is not None else globals_dict.get("port", DEFAULT_PORT)
+    auth_url = resolve(entry, "auth_url", args.auth_url, globals_dict.get("auth_url"), DEFAULT_AUTH_URL)
+
+    cmd = [
+        sys.executable, str(screenshot_script), entry["path"],
+        "-o", str(output_path),
+        "--host", args.host,
+        "--port", str(port),
+        "--width", str(width),
+        "--height", str(height),
+        "--wait", str(args.wait),
+        "--auth-url", auth_url,
+    ]
+    if dark:
+        cmd.append("--dark")
+    if full_page:
+        cmd.append("--full-page")
+    if no_auth:
+        cmd.append("--no-auth")
+    return cmd, bool(dark)
+
+
+def generate_index_html(output_dir, results):
+    """Generate index.html with a responsive grid of all screenshots."""
+    cards = []
+    for path, filename, ok, message in results:
+        if ok and filename and (output_dir / filename).exists():
+            cards.append(f"""
+    <figure class="screenshot-card">
+      <a href="{html.escape(filename)}" target="_blank">
+        <img src="{html.escape(filename)}" alt="{html.escape(path)}" loading="lazy">
+      </a>
+      <figcaption><code>{html.escape(path)}</code></figcaption>
+    </figure>""")
+        else:
+            msg = html.escape(message or "Unknown error")
+            cards.append(f"""
+    <figure class="screenshot-card error">
+      <div class="error-placeholder">Failed to capture</div>
+      <figcaption><code>{html.escape(path)}</code><br><small class="error-msg">{msg}</small></figcaption>
+    </figure>""")
+
+    cards_html = "\n".join(cards)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    total = len(results)
+    success = sum(1 for _, _, ok, _ in results if ok)
+
+    doc = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Screenshots &mdash; {timestamp}</title>
+  <style>
+    *, *::before, *::after {{ box-sizing: border-box; }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      margin: 0;
+      padding: 2rem;
+    }}
+    h1 {{ font-size: 1.5rem; margin-bottom: 0.25rem; }}
+    .meta {{ color: #94a3b8; font-size: 0.875rem; margin-bottom: 2rem; }}
+    .grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+      gap: 1.5rem;
+    }}
+    .screenshot-card {{
+      background: #1e2130;
+      border-radius: 0.75rem;
+      overflow: hidden;
+      margin: 0;
+      border: 1px solid #2d3348;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }}
+    .screenshot-card:hover {{
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }}
+    .screenshot-card img {{
+      width: 100%;
+      display: block;
+      border-bottom: 1px solid #2d3348;
+    }}
+    .screenshot-card a {{ display: block; }}
+    figcaption {{
+      padding: 0.75rem 1rem;
+      font-size: 0.875rem;
+    }}
+    figcaption code {{
+      font-family: "SF Mono", "Fira Code", monospace;
+      color: #7dd3fc;
+    }}
+    .error-placeholder {{
+      height: 200px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #2d1515;
+      color: #f87171;
+      font-size: 0.875rem;
+    }}
+    .error-msg {{
+      color: #f87171;
+      font-size: 0.75rem;
+      word-break: break-all;
+    }}
+  </style>
+</head>
+<body>
+  <h1>Screenshots</h1>
+  <p class="meta">Captured {success}/{total} pages &middot; {timestamp}</p>
+  <div class="grid">
+{cards_html}
+  </div>
+</body>
+</html>
+"""
+
+    index_path = output_dir / "index.html"
+    index_path.write_text(doc)
+    return index_path
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Capture multi-page screenshots of the local dev server in parallel.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument("paths", nargs="*", help="URL paths to screenshot (override the config file)")
+    parser.add_argument("--config", help="Path to a screenshots.yml (default: auto-discover in cwd)")
+    parser.add_argument("--host", default=DEFAULT_HOST, help="Dev server host (default: localhost)")
+    # port/width/height default to None so we can tell "user passed it" from "use config/default".
+    parser.add_argument("--port", type=int, default=None, help="Dev server port (default: 3000)")
+    parser.add_argument("--width", type=int, default=None, help="Viewport width (default: 1280)")
+    parser.add_argument("--height", type=int, default=None, help="Viewport height (default: 720)")
+    parser.add_argument("--wait", type=int, default=DEFAULT_WAIT_MS, help="Wait ms after load (default: 1500)")
+    parser.add_argument("--dark", action="store_true", help="Dark color scheme for all pages")
+    parser.add_argument("--full-page", action="store_true", help="Capture full scrollable page for all pages")
+    parser.add_argument("--no-auth", action="store_true", help="Skip authentication for all pages")
+    parser.add_argument("--auth-url", default=None,
+                        help="Auth URL template with {token} and {path} placeholders")
+    parser.add_argument("--workers", type=int, default=4, help="Parallel browser workers (default: 4)")
+    args = parser.parse_args()
+
+    screenshot_script = find_sibling_screenshot()
+    if not screenshot_script.exists():
+        print(f"ERROR: sibling screenshot tool not found at {screenshot_script}", file=sys.stderr)
+        sys.exit(1)
+
+    # --- Resolve which pages to capture ------------------------------------
+    globals_dict = {}
+    if args.paths:
+        entries = [{"path": p} for p in args.paths]
+        print(f"Using {len(entries)} path(s) from CLI arguments.")
+    else:
+        config_path = discover_config(args.config)
+        if config_path is None:
+            print(CONFIG_FORMAT_HELP.format(candidates=", ".join(CONFIG_CANDIDATES)), file=sys.stderr)
+            sys.exit(1)
+        globals_dict, entries = load_config(config_path)
+        print(f"Loaded {len(entries)} page(s) from {config_path}")
+
+    # --- Server preflight (fail fast before spawning workers) --------------
+    host = args.host
+    port = args.port if args.port is not None else globals_dict.get("port", DEFAULT_PORT)
+    try:
+        sock = socket.create_connection((host, port), timeout=2)
+        sock.close()
+    except (socket.timeout, ConnectionRefusedError, OSError):
+        print(f"\nERROR: Dev server not running on {host}:{port}", file=sys.stderr)
+        sys.exit(1)
+
+    # --- Prepare output dir & per-entry commands ---------------------------
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = Path.cwd() / "tmp" / "screenshots" / f"batch_{timestamp}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Output directory: {output_dir}")
+
+    jobs = []  # (index, path, filename, cmd)
+    for i, entry in enumerate(entries):
+        # Peek dark to name the file; build_command returns the authoritative value.
+        tmp_cmd, dark = build_command(screenshot_script, entry, Path("placeholder"), args, globals_dict)
+        filename = path_to_filename(entry["path"], dark)
+        cmd, _ = build_command(screenshot_script, entry, output_dir / filename, args, globals_dict)
+        jobs.append((i, entry["path"], filename, cmd))
+
+    # --- Capture in parallel ------------------------------------------------
+    results = [None] * len(jobs)
+    lock = threading.Lock()
+
+    def capture(job):
+        idx, path, filename, cmd = job
+        with lock:
+            print(f"  [{idx + 1}/{len(jobs)}] Capturing {path} ...")
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        ok = proc.returncode == 0
+        # The single tool prints diagnostics to stderr; surface the last line.
+        stderr = proc.stderr.strip()
+        message = stderr.splitlines()[-1] if stderr else ""
+        with lock:
+            if ok:
+                print(f"  OK    {path} -> {filename}")
+            else:
+                print(f"  ERROR {path}: {message or 'capture failed'}")
+        return idx, (path, filename if ok else None, ok, message)
+
+    print(f"\nCapturing {len(jobs)} page(s) with {args.workers} parallel workers...\n")
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        futures = [executor.submit(capture, job) for job in jobs]
+        for future in as_completed(futures):
+            idx, result = future.result()
+            results[idx] = result
+
+    # --- Index + summary ----------------------------------------------------
+    print("\nGenerating index.html...")
+    index_path = generate_index_html(output_dir, results)
+
+    success = sum(1 for _, _, ok, _ in results if ok)
+    total = len(results)
+    print(f"\nDone! {success}/{total} screenshots captured.")
+    print(f"Index: {index_path}")
+    print(f"Open:  xdg-open '{index_path}' 2>/dev/null || open '{index_path}'")
+
+    # Non-zero if any page failed, so callers/CI can detect a bad batch.
+    sys.exit(0 if success == total else 1)
+
+
+if __name__ == "__main__":
+    main()

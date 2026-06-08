@@ -19,6 +19,23 @@ unresolved auth wall, and prints what happened to stderr. If it reports that the
 auth but the auth route returned 404, invoke `Skill(vischeck:setup-auth)` to add the dev auth
 route, then retry.
 
+## Multiple pages at once
+
+When a change touches several pages (or you want to re-screenshot the same set while iterating),
+use the `screenshots` (plural) batch tool instead of calling `screenshot` repeatedly. It captures
+every page in parallel — reusing the exact same auth/error behaviour — and writes them plus an
+`index.html` grid to `tmp/screenshots/batch_<timestamp>/`:
+
+```bash
+screenshots / /dashboard /news   # capture exactly these paths
+screenshots                      # use ./screenshots.yml (a consistent saved list)
+```
+
+Positional paths always win; with no paths it reads `screenshots.yml` (auto-discovered in cwd).
+Keep a `screenshots.yml` in the project to re-verify the same page set every iteration (entries are
+path strings or mappings with per-entry overrides like `dark`/`width`/`height`). After a batch, Read
+the individual PNGs in the batch dir to inspect each page; the run exits non-zero if any page failed.
+
 ## Dark / light mode
 
 Check this project's CLAUDE.md for any mention of dark mode or light mode:
@@ -35,6 +52,10 @@ screenshot /path --full-page               # full scrollable page
 screenshot /path --port 8080               # custom port
 screenshot /path --no-auth                 # skip authentication (public pages)
 screenshot /path --auth-url "/login?token={token}&next={path}"  # custom auth URL template
+
+screenshots / /dashboard /news             # batch: capture several paths at once
+screenshots                                # batch: use ./screenshots.yml
+screenshots --dark                         # batch: dark scheme for all pages
 ```
 
 Token is read from `DEV_AUTH_TOKEN` env var (default: `claude-screenshot-token`). Screenshots save to `tmp/screenshots/` in the current working directory.
