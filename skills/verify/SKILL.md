@@ -36,6 +36,11 @@ Keep a `screenshots.yml` in the project to re-verify the same page set every ite
 path strings or mappings with per-entry overrides like `dark`/`width`/`height`). After a batch, Read
 the individual PNGs in the batch dir to inspect each page; the run exits non-zero if any page failed.
 
+Define reusable **groups** in `screenshots.yml` (e.g. `smoke`, `admin`, `users`) and capture one with
+`screenshots --group smoke`, several with `screenshots -g smoke,admin`, all with `--all`, or list them
+with `screenshots --list`. A group can carry group-level defaults (e.g. a whole `admin` group `dark:
+true`). This lets you keep coherent, named slices to re-screenshot while iterating on a section.
+
 ## Dark / light mode
 
 Check this project's CLAUDE.md for any mention of dark mode or light mode:
@@ -56,6 +61,9 @@ screenshot /path --auth-url "/login?token={token}&next={path}"  # custom auth UR
 screenshots / /dashboard /news             # batch: capture several paths at once
 screenshots                                # batch: use ./screenshots.yml
 screenshots --dark                         # batch: dark scheme for all pages
+screenshots --group smoke                  # batch: capture a named group
+screenshots -g smoke,admin                 # batch: union of several groups
+screenshots --list                         # batch: list defined groups
 ```
 
 Token is read from `DEV_AUTH_TOKEN` env var (default: `claude-screenshot-token`). Screenshots save to `tmp/screenshots/` in the current working directory.

@@ -15,19 +15,24 @@ needs auth, HTTP-error handling, dark mode, full-page, custom auth URLs, and
 non-zero exit on a bad capture — applies identically here, with no duplication.
 
 Usage:
-  screenshots                     # use ./screenshots.yml (auto-discovered)
+  screenshots                     # use ./screenshots.yml (top-level `pages:`)
   screenshots / /dashboard /news  # capture exactly these paths (ignores yml)
+  screenshots --group smoke       # capture the named group 'smoke'
+  screenshots -g smoke,admin      # union of several groups (repeatable too)
+  screenshots --all               # union of every group in the config
+  screenshots --list              # list the groups defined in the config
   screenshots --config pages.yml  # explicit config file
   screenshots --dark              # global default: dark scheme for all pages
 
-Page resolution precedence:
+Selection precedence:
   1. Positional CLI paths always win.
-  2. Else --config <path> if given, else the first existing of
-     screenshots.yml / .screenshots.yml / config/screenshots.yml in the cwd.
-  3. Else: print the expected config format and exit non-zero (no guessed list).
+  2. Else --list / --group / --all act on the config's `groups:`.
+  3. Else the config's top-level `pages:` list (if any) is the default set.
+  4. Else: list the available groups (or the format help) and exit non-zero
+     — it never guesses a page list.
 
 config/screenshots.yml format:
-  # optional global defaults (CLI flags override these for ALL pages)
+  # optional global defaults (apply to every page unless overridden)
   port: 3000
   dark: false
   width: 1280
@@ -35,20 +40,32 @@ config/screenshots.yml format:
   full_page: false
   no_auth: false
   auth_url: "/dev_auth/login?token={token}&redirect_to={path}"
-  pages:
+
+  pages:                    # optional default set (used when no group selected)
     - /                     # string form
-    - /dashboard
     - path: /dashboard      # mapping form with per-entry overrides
       dark: true
-    - path: /mobile
-      width: 375
-      height: 812
-      full_page: true
-      no_auth: true
+
+  groups:                   # optional named, reusable sets
+    smoke:                  # list form: just page entries
+      - /
+      - /shows
+      - /news
+    admin:                  # mapping form: group-level defaults + pages
+      dark: true
+      auth_url: "/admin_login?token={token}&redirect_to={path}"
+      pages:
+        - /admin
+        - /admin/users
+    users:
+      - /users/sign_in
+      - path: /users/profile
+        dark: true
 
 Each page entry may be a plain path string or a mapping with per-entry overrides
-(path, dark, full_page, width, height, no_auth, auth_url) that take precedence
-over the global defaults.
+(path, dark, full_page, width, height, no_auth, auth_url). Option specificity:
+per-entry > group default > CLI flag > top-level global > built-in default.
+Overlapping paths across selected groups are captured once (deduped by filename).
 
 Output: all images plus an index.html grid land in
 tmp/screenshots/batch_<timestamp>/ in the current working directory.
@@ -87,16 +104,23 @@ No paths given and no config file found.
 Either pass paths directly:
     screenshots / /dashboard /news
 
-or create a screenshots.yml in this directory:
+or create a screenshots.yml in this directory with a `pages:` list and/or
+reusable `groups:` (select a group with --group NAME / --all, list with --list):
 
-    pages:
+    pages:                    # default set, used when no group is selected
       - /
-      - /dashboard
       - path: /dashboard      # mapping form with per-entry overrides
         dark: true
-      - path: /mobile
-        width: 375
-        height: 812
+
+    groups:
+      smoke:                  # list form
+        - /
+        - /shows
+      admin:                  # mapping form with group-level defaults
+        dark: true
+        pages:
+          - /admin
+          - /admin/users
 
 Searched for: {candidates}
 """
@@ -122,11 +146,37 @@ def discover_config(explicit):
     return None
 
 
+def parse_entries(raw_list, config_path, source_desc):
+    """Parse a list of page entries (string or mapping) into a list of entry dicts."""
+    entries = []
+    for raw in raw_list:
+        if isinstance(raw, str):
+            entries.append({"path": raw})
+        elif isinstance(raw, dict) and "path" in raw:
+            entry = {"path": str(raw["path"])}
+            for k in ENTRY_KEYS:
+                if k in raw:
+                    entry[k] = raw[k]
+            entries.append(entry)
+        else:
+            print(
+                f"ERROR: invalid page entry in {source_desc} of {config_path}: {raw!r}\n"
+                f"       Each entry must be a path string or a mapping with a "
+                f"'path:' key.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    return entries
+
+
 def load_config(config_path):
     """
-    Parse a screenshots.yml. Returns (globals_dict, entries) where entries is a
-    list of dicts each having at least 'path'. Exits non-zero on real problems
-    (missing PyYAML, malformed file) rather than silently falling back.
+    Parse a screenshots.yml. Returns (globals_dict, default_entries, groups):
+      - globals_dict: top-level `port` + ENTRY_KEYS, used as global defaults.
+      - default_entries: parsed top-level `pages:` list, or None if absent.
+      - groups: dict name -> {"defaults": {...ENTRY_KEYS...}, "entries": [...]}.
+    Exits non-zero on real problems (missing PyYAML, malformed file, or neither
+    `pages:` nor `groups:`) rather than silently falling back.
     """
     if not HAS_YAML:
         print(
@@ -140,9 +190,9 @@ def load_config(config_path):
     with open(config_path) as f:
         data = yaml.safe_load(f)
 
-    if not data or "pages" not in data or not data["pages"]:
+    if not isinstance(data, dict):
         print(
-            f"ERROR: {config_path} has no 'pages:' list. See the format in "
+            f"ERROR: {config_path} is empty or not a mapping. See the format in "
             f"`screenshots --help`.",
             file=sys.stderr,
         )
@@ -150,25 +200,52 @@ def load_config(config_path):
 
     globals_dict = {k: data[k] for k in ("port",) + ENTRY_KEYS if k in data}
 
-    entries = []
-    for raw in data["pages"]:
-        if isinstance(raw, str):
-            entries.append({"path": raw})
-        elif isinstance(raw, dict) and "path" in raw:
-            entry = {"path": str(raw["path"])}
-            for k in ENTRY_KEYS:
-                if k in raw:
-                    entry[k] = raw[k]
-            entries.append(entry)
+    default_entries = None
+    if data.get("pages"):
+        default_entries = parse_entries(data["pages"], config_path, "'pages'")
+
+    groups = {}
+    raw_groups = data.get("groups") or {}
+    if not isinstance(raw_groups, dict):
+        print(
+            f"ERROR: 'groups:' in {config_path} must be a mapping of name -> pages.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    for name, gval in raw_groups.items():
+        if isinstance(gval, list):
+            groups[name] = {
+                "defaults": {},
+                "entries": parse_entries(gval, config_path, f"group '{name}'"),
+            }
+        elif isinstance(gval, dict):
+            if not gval.get("pages"):
+                print(
+                    f"ERROR: group '{name}' in {config_path} has no 'pages:' list.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            groups[name] = {
+                "defaults": {k: gval[k] for k in ENTRY_KEYS if k in gval},
+                "entries": parse_entries(gval["pages"], config_path, f"group '{name}'"),
+            }
         else:
             print(
-                f"ERROR: invalid page entry in {config_path}: {raw!r}\n"
-                f"       Each entry must be a path string or a mapping with a "
-                f"'path:' key.",
+                f"ERROR: group '{name}' in {config_path} must be a list of pages or a "
+                f"mapping with a 'pages:' key.",
                 file=sys.stderr,
             )
             sys.exit(1)
-    return globals_dict, entries
+
+    if default_entries is None and not groups:
+        print(
+            f"ERROR: {config_path} has no 'pages:' list or 'groups:'. See the format "
+            f"in `screenshots --help`.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    return globals_dict, default_entries, groups
 
 
 def path_to_filename(path, dark):
@@ -178,10 +255,12 @@ def path_to_filename(path, dark):
     return f"{safe}{suffix}.png"
 
 
-def resolve(entry, key, cli_value, global_value, default):
-    """Resolve one option: per-entry override > CLI flag > config global > default."""
+def resolve(entry, key, group_defaults, cli_value, global_value, default):
+    """Resolve one option by specificity: per-entry > group default > CLI flag > global > default."""
     if key in entry:
         return entry[key]
+    if key in group_defaults:
+        return group_defaults[key]
     if cli_value is not None:
         return cli_value
     if global_value is not None:
@@ -189,15 +268,16 @@ def resolve(entry, key, cli_value, global_value, default):
     return default
 
 
-def build_command(screenshot_script, entry, output_path, args, globals_dict):
+def build_command(screenshot_script, entry, group_defaults, output_path, args, globals_dict):
     """Build the argv to invoke the single-page `screenshot` tool for one entry."""
-    dark = resolve(entry, "dark", True if args.dark else None, globals_dict.get("dark"), False)
-    full_page = resolve(entry, "full_page", True if args.full_page else None, globals_dict.get("full_page"), False)
-    no_auth = resolve(entry, "no_auth", True if args.no_auth else None, globals_dict.get("no_auth"), False)
-    width = resolve(entry, "width", args.width, globals_dict.get("width"), DEFAULT_WIDTH)
-    height = resolve(entry, "height", args.height, globals_dict.get("height"), DEFAULT_HEIGHT)
+    gd = group_defaults
+    dark = resolve(entry, "dark", gd, True if args.dark else None, globals_dict.get("dark"), False)
+    full_page = resolve(entry, "full_page", gd, True if args.full_page else None, globals_dict.get("full_page"), False)
+    no_auth = resolve(entry, "no_auth", gd, True if args.no_auth else None, globals_dict.get("no_auth"), False)
+    width = resolve(entry, "width", gd, args.width, globals_dict.get("width"), DEFAULT_WIDTH)
+    height = resolve(entry, "height", gd, args.height, globals_dict.get("height"), DEFAULT_HEIGHT)
     port = args.port if args.port is not None else globals_dict.get("port", DEFAULT_PORT)
-    auth_url = resolve(entry, "auth_url", args.auth_url, globals_dict.get("auth_url"), DEFAULT_AUTH_URL)
+    auth_url = resolve(entry, "auth_url", gd, args.auth_url, globals_dict.get("auth_url"), DEFAULT_AUTH_URL)
 
     # Invoke through `uv run --script` so the sibling resolves its OWN PEP 723
     # deps (playwright) — not this script's interpreter, which lacks them.
@@ -344,6 +424,11 @@ def main():
     parser.add_argument("--auth-url", default=None,
                         help="Auth URL template with {token} and {path} placeholders")
     parser.add_argument("--workers", type=int, default=4, help="Parallel browser workers (default: 4)")
+    parser.add_argument("--group", "-g", action="append", default=None,
+                        help="Named group(s) from the config to capture (repeatable, comma-separated)")
+    parser.add_argument("--all", action="store_true", help="Capture the union of every group in the config")
+    parser.add_argument("--list", action="store_true", dest="list_groups",
+                        help="List the groups defined in the config and exit")
     args = parser.parse_args()
 
     screenshot_script = find_sibling_screenshot()
@@ -360,17 +445,71 @@ def main():
         sys.exit(1)
 
     # --- Resolve which pages to capture ------------------------------------
+    # `selection` is a list of (entry, group_defaults) pairs.
     globals_dict = {}
-    if args.paths:
-        entries = [{"path": p} for p in args.paths]
-        print(f"Using {len(entries)} path(s) from CLI arguments.")
-    else:
+    selection = []
+
+    # Flatten --group into a list of names (supports comma-separated + repeats).
+    requested_groups = []
+    if args.group:
+        for g in args.group:
+            requested_groups.extend(n.strip() for n in g.split(",") if n.strip())
+
+    def load():
         config_path = discover_config(args.config)
         if config_path is None:
             print(CONFIG_FORMAT_HELP.format(candidates=", ".join(CONFIG_CANDIDATES)), file=sys.stderr)
             sys.exit(1)
-        globals_dict, entries = load_config(config_path)
-        print(f"Loaded {len(entries)} page(s) from {config_path}")
+        return (config_path,) + load_config(config_path)
+
+    if args.paths:
+        selection = [({"path": p}, {}) for p in args.paths]
+        print(f"Using {len(selection)} path(s) from CLI arguments.")
+    elif args.list_groups:
+        config_path, globals_dict, default_entries, groups = load()
+        if groups:
+            print(f"Groups defined in {config_path}:")
+            for name, g in groups.items():
+                print(f"  {name}  ({len(g['entries'])} page(s))")
+        else:
+            print(f"No groups defined in {config_path}.")
+        if default_entries:
+            print(f"Top-level 'pages:' default set: {len(default_entries)} page(s).")
+        sys.exit(0)
+    elif requested_groups or args.all:
+        config_path, globals_dict, default_entries, groups = load()
+        if not groups:
+            print(f"ERROR: no 'groups:' defined in {config_path}.", file=sys.stderr)
+            sys.exit(1)
+        chosen = list(groups) if args.all else requested_groups
+        for name in chosen:
+            if name not in groups:
+                print(
+                    f"ERROR: group '{name}' not found in {config_path}. "
+                    f"Available: {', '.join(groups)}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+        for name in chosen:
+            g = groups[name]
+            for entry in g["entries"]:
+                selection.append((entry, g["defaults"]))
+        label = "all groups" if args.all else ", ".join(chosen)
+        print(f"Capturing {label} ({len(selection)} page(s) before dedup) from {config_path}.")
+    else:
+        config_path, globals_dict, default_entries, groups = load()
+        if default_entries:
+            selection = [(e, {}) for e in default_entries]
+            print(f"Loaded {len(selection)} page(s) from {config_path}")
+        else:
+            # Groups exist but none selected — never guess; list them.
+            print(
+                f"No paths or --group given. Available groups in {config_path}: "
+                f"{', '.join(groups)}\n"
+                f"Pass --group NAME (repeatable / comma-separated), --all, or --list.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     # --- Server preflight (fail fast before spawning workers) --------------
     host = args.host
@@ -389,12 +528,16 @@ def main():
     print(f"Output directory: {output_dir}")
 
     jobs = []  # (index, path, filename, cmd)
-    for i, entry in enumerate(entries):
+    seen = set()  # dedup overlapping paths across selected groups, by output filename
+    for entry, gdefaults in selection:
         # Peek dark to name the file; build_command returns the authoritative value.
-        tmp_cmd, dark = build_command(screenshot_script, entry, Path("placeholder"), args, globals_dict)
+        _, dark = build_command(screenshot_script, entry, gdefaults, Path("placeholder"), args, globals_dict)
         filename = path_to_filename(entry["path"], dark)
-        cmd, _ = build_command(screenshot_script, entry, output_dir / filename, args, globals_dict)
-        jobs.append((i, entry["path"], filename, cmd))
+        if filename in seen:
+            continue
+        seen.add(filename)
+        cmd, _ = build_command(screenshot_script, entry, gdefaults, output_dir / filename, args, globals_dict)
+        jobs.append((len(jobs), entry["path"], filename, cmd))
 
     # --- Capture in parallel ------------------------------------------------
     results = [None] * len(jobs)

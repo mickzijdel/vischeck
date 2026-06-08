@@ -46,34 +46,60 @@ Screenshots save to `tmp/screenshots/` in the current working directory. Token i
 
 ```bash
 screenshots / /dashboard /news       # capture exactly these paths
-screenshots                          # use ./screenshots.yml (auto-discovered)
+screenshots                          # use ./screenshots.yml top-level `pages:`
+screenshots --group smoke            # capture a named group
+screenshots -g smoke,admin           # union of several groups (repeatable too)
+screenshots --all                    # union of every group
+screenshots --list                   # list the groups defined in the config
 screenshots --config pages.yml       # explicit config file
 screenshots --dark                   # dark scheme for all pages
 screenshots --workers 8              # more parallelism
 ```
 
-**Path resolution:** positional paths always win. With no paths, it auto-discovers `screenshots.yml`, `.screenshots.yml`, or `config/screenshots.yml` in the current directory. With neither, it prints the expected format and exits non-zero (it never guesses a page list).
+**Selection:** positional paths always win. Otherwise `--group` / `--all` / `--list` operate on the config's `groups:`, and with no selection the config's top-level `pages:` list is used. The config file is auto-discovered as `screenshots.yml`, `.screenshots.yml`, or `config/screenshots.yml` in the current directory. With nothing to capture it prints the available groups (or the format help) and exits non-zero — it never guesses a page list.
 
-Create a `screenshots.yml` to keep a consistent set of pages. Each entry is a plain path string, or a mapping with per-entry overrides; top-level keys are global defaults (CLI flags override them for all pages):
+Create a `screenshots.yml` to keep a consistent set of pages. Each entry is a plain path string, or a mapping with per-entry overrides; top-level keys are global defaults:
 
 ```yaml
 # optional global defaults
 port: 3000
 width: 1280
 height: 720
-pages:
+
+pages:                    # default set, used when no group is selected
   - /                     # string form
-  - /dashboard
   - path: /dashboard      # mapping form, per-entry overrides
     dark: true            #   capture this one in dark mode too
   - path: /mobile
     width: 375            #   override viewport for just this page
     height: 812
-    full_page: true
-    no_auth: true
 ```
 
-Per-entry override keys: `dark`, `full_page`, `width`, `height`, `no_auth`, `auth_url`. The dark variant of a path gets a `_dark` filename suffix so it doesn't collide with the light one. The command exits non-zero if any page fails to capture.
+### Reusable groups
+
+Define named `groups:` to re-screenshot a coherent slice without retyping paths — e.g. a `smoke` set for the public site, an `admin` set, a `users` set. A group is either a **list** of page entries, or a **mapping** with `pages:` plus group-level option defaults (e.g. the whole `admin` group in dark mode or behind a different auth URL):
+
+```yaml
+groups:
+  smoke:                  # list form
+    - /
+    - /shows
+    - /news
+  admin:                  # mapping form with group-level defaults
+    dark: true
+    auth_url: "/admin_login?token={token}&redirect_to={path}"
+    pages:
+      - /admin
+      - /admin/users
+  users:
+    - /users/sign_in
+    - path: /users/profile
+      dark: true
+```
+
+Select with `screenshots --group admin`, combine with `screenshots -g smoke,users` (or `--all`), and enumerate with `screenshots --list`. Overlapping paths across selected groups are captured once.
+
+**Option precedence** (most specific wins): per-entry override → group-level default → CLI flag → top-level global → built-in default. Override keys: `dark`, `full_page`, `width`, `height`, `no_auth`, `auth_url`. The dark variant of a path gets a `_dark` filename suffix so it doesn't collide with the light one. The command exits non-zero if any page fails to capture.
 
 ## Dev auth
 
