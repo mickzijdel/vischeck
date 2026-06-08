@@ -107,7 +107,14 @@ The `screenshot` tool authenticates via a lightweight dev-only bypass route. To 
 
 ## Hook behaviour
 
-After every `Write` or `Edit` on a view/template file, Claude is reminded to invoke `vischeck:verify`. The hook also:
+After every `Write` or `Edit` on a view/template file, Claude is reminded to invoke `vischeck:verify`. A file counts as a view if **either**:
+
+- its extension is a known template/markup type (`.erb`, `.html`, `.jsx`, `.tsx`, `.vue`, `.svelte`, `.hbs`, `.ejs`, `.pug`, `.liquid`, `.blade.php`, `.twig`, …), **or**
+- it lives in a `views/`, `components/`, `pages/`, `layouts/`, or `partials/` directory (or `app/javascript/controllers/`).
+
+Files in a `templates/` directory are matched by **extension only** — a `templates/` folder routinely holds config/data files (Helm/CI YAML, Pkl config templates), so matching it by path alone misfired on `.yml`/`.pkl` and the like. Real HTML templates in there still fire via their extension.
+
+The hook also:
 
 - Checks `CLAUDE.md` for dark/light mode mentions — if found, suggests testing both; if absent, suggests documenting it
 - Detects interactive elements (forms, buttons) and suggests playwright-cli testing

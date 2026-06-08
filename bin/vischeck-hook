@@ -16,7 +16,7 @@ esac
 
 if [ "$IS_VIEW" = false ]; then
   case "$FILE_PATH" in
-    */views/*|*/templates/*|*/components/*|*/pages/*|*/layouts/*|*/partials/*)
+    */views/*|*/components/*|*/pages/*|*/layouts/*|*/partials/*)
       IS_VIEW=true ;;
     */app/javascript/controllers/*)
       IS_VIEW=true ;;
