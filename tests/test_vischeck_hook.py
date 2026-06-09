@@ -25,7 +25,9 @@ pytestmark = pytest.mark.skipif(
 
 def run_hook(file_path, new_string="x"):
     """Run the hook with a synthetic PostToolUse payload; return stdout."""
-    payload = json.dumps({"tool_input": {"file_path": file_path, "new_string": new_string}})
+    payload = json.dumps(
+        {"tool_input": {"file_path": file_path, "new_string": new_string}}
+    )
     result = subprocess.run(
         ["bash", str(HOOK)],
         input=payload,
