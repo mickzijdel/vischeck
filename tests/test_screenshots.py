@@ -315,10 +315,10 @@ def run_main(mod, monkeypatch, tmp_path, config_text, argv, server_up=True):
             def close(self):
                 pass
 
-        monkeypatch.setattr(socket, "create_connection", lambda *a, **k: _Sock())
+        monkeypatch.setattr(socket, "create_connection", lambda *_a, **_k: _Sock())
     else:
 
-        def _refuse(*a, **k):
+        def _refuse(*_a, **_k):
             raise ConnectionRefusedError
 
         monkeypatch.setattr(socket, "create_connection", _refuse)
@@ -326,7 +326,7 @@ def run_main(mod, monkeypatch, tmp_path, config_text, argv, server_up=True):
     monkeypatch.setattr(
         subprocess,
         "run",
-        lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        lambda *_a, **_k: SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
 
     with pytest.raises(SystemExit) as exc:
