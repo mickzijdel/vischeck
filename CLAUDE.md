@@ -10,7 +10,7 @@ Bump the plugin version on every commit. Patch version for small fixes, minor ve
 
 # Development
 
-Tooling is managed by **mise** + **hk** (dev-hooks:dev-env-setup standard v3). Tools are
+Tooling is managed by **mise** + **hk** (dev-hooks:dev-env-setup standard v5). Tools are
 spec'd `"latest"` in `mise.toml` and pinned in the committed `mise.lock`.
 
 - `mise install` — provision the toolchain (hk, gitleaks, shellcheck, shfmt, uv, ruff, node).
