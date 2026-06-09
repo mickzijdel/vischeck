@@ -5,13 +5,55 @@ description: Visually verify UI changes by taking authenticated screenshots of t
 
 # vischeck:verify
 
-Use the `screenshot` CLI to visually verify UI changes against a running dev server. Always Read the saved image after taking a screenshot.
+Use the `screenshot` CLI to visually verify UI changes against a running dev server. Always Read the saved image after taking a screenshot — then **review it like a critical designer, not a rubber stamp.**
 
 ## When to use
 
 After editing any view, template, component, or layout file:
-1. Take a screenshot and Read the image to check it visually
-2. For interactive elements (forms, buttons, inputs), also test the interaction with playwright-cli
+1. Take a screenshot and Read the image
+2. **Judge it against the rubric below — this is the point of the skill, not an afterthought**
+3. For interactive elements (forms, buttons, inputs), also test the interaction with playwright-cli
+
+## How to judge the screenshot (do not skip)
+
+A bare verdict of "looks good" is a **failure of this skill**. Your default instinct will be to
+approve — resist it. UIs that are subtly wrong (inputs that don't match the house style, cluttered
+cards, low-contrast text) look fine at a glance and are exactly what this step exists to catch.
+
+Work in this order, and write down what you observe **before** giving any verdict:
+
+**1. Zoom in.** A full-page shot is too small to judge detail — borders, contrast, and spacing get
+lost. Take a focused shot of the component you just changed and Read that too:
+
+```bash
+screenshot /signup --selector ".signup-form"   # just the thing you changed
+```
+
+**2. Compare against the house style.** You cannot know what "correct" looks like from one screenshot
+in isolation. Screenshot an **existing, known-good** page or component of the same kind (another form,
+another card, another table) and compare side by side:
+
+```bash
+screenshot /login --selector ".login-form"      # a form that's already done right
+```
+
+Then ask: do the inputs, buttons, and cards in *your* change use the **same** border, corner radius,
+padding, font, size, and color as the established pattern? Any divergence is a finding.
+
+**3. Walk the checklist** explicitly — name what you checked, don't just assert "looks fine":
+
+- **House-style conformance** — inputs / buttons / cards match the existing components (step 2)
+- **Contrast & legibility** — text reads clearly against its background; flag grey-on-grey, low-contrast placeholder/label text, text over busy backgrounds
+- **Spacing & alignment** — consistent padding/margins; edges line up; nothing crammed against a border
+- **Clutter & density** — is the card/section overcrowded? Is there a clear visual hierarchy, or does everything compete?
+- **Typography** — font family / size / weight consistent with the rest of the app
+- **Truncation / overflow** — no clipped text, broken wrapping, unexpected scrollbars, or elements spilling out
+- **States** (where relevant) — focus, hover, disabled, error — exercise them with playwright-cli, don't assume
+- **Responsive** — for layout changes, also take a mobile shot (`--width 375 --height 812`)
+
+**4. Report findings, then verdict.** List each problem tagged **blocker** (broken/unusable),
+**should-fix** (clearly off-style or sloppy), or **nit** (minor polish). Only after you have walked the
+checklist above may you conclude there are no findings — and say which checks you ran to get there.
 
 `screenshot` auto-detects whether the page needs auth — no flag required for public pages.
 It exits non-zero (while still saving the image) when the capture is an HTTP error or an
@@ -54,6 +96,7 @@ screenshot /path                           # authenticated screenshot (default p
 screenshot /path --dark                    # dark color scheme
 screenshot /path --width 375 --height 812  # mobile viewport
 screenshot /path --full-page               # full scrollable page
+screenshot /path --selector ".card"        # just one element, for close inspection
 screenshot /path --port 8080               # custom port
 screenshot /path --no-auth                 # skip authentication (public pages)
 screenshot /path --auth-url "/login?token={token}&next={path}"  # custom auth URL template
@@ -63,6 +106,7 @@ screenshots                                # batch: use ./screenshots.yml
 screenshots --dark                         # batch: dark scheme for all pages
 screenshots --group smoke                  # batch: capture a named group
 screenshots -g smoke,admin                 # batch: union of several groups
+screenshots / /login --selector ".form"    # batch: same element on each page
 screenshots --list                         # batch: list defined groups
 ```
 

@@ -11,6 +11,7 @@ Usage:
   screenshot /connections --dark
   screenshot /connections --width 375 --height 812
   screenshot /connections --full-page
+  screenshot /connections --selector ".search-form"   # just one component
   screenshot /admin/users -o tmp/screenshots/custom.png
   screenshot /dashboard --port 8000 --auth-url "/dev-login?token=secret&next={path}"
 
@@ -76,6 +77,11 @@ def main():
     parser.add_argument(
         "--full-page", action="store_true", help="Capture full scrollable page"
     )
+    parser.add_argument(
+        "--selector",
+        help="CSS selector: capture just this element (for close inspection of one "
+        "component). Mutually exclusive with --full-page.",
+    )
     parser.add_argument("--output", "-o", help="Custom output path")
     parser.add_argument(
         "--host", default="localhost", help="Dev server host (default: localhost)"
@@ -96,6 +102,14 @@ def main():
         "--no-auth", action="store_true", help="Skip authentication (for public pages)"
     )
     args = parser.parse_args()
+
+    if args.selector and args.full_page:
+        print(
+            "ERROR: --selector and --full-page are mutually exclusive "
+            "(an element shot is already bounded).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     if not check_server(args.host, args.port):
         print(
@@ -118,8 +132,13 @@ def main():
             if (args.width != 1280 or args.height != 720)
             else ""
         )
+        if args.selector:
+            sel_slug = re.sub(r"[^a-zA-Z0-9]+", "-", args.selector).strip("-")[:40]
+            sel = f"_sel-{sel_slug}" if sel_slug else "_sel"
+        else:
+            sel = ""
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = screenshots_dir / f"{safe_path}{mode}{size}_{ts}.png"
+        output_path = screenshots_dir / f"{safe_path}{mode}{size}{sel}_{ts}.png"
 
     token = os.environ.get("DEV_AUTH_TOKEN", "claude-screenshot-token")
     base_url = f"http://{args.host}:{args.port}"
@@ -219,7 +238,24 @@ def main():
             exit_code = 1
 
         page.wait_for_timeout(args.wait)
-        page.screenshot(path=str(output_path), full_page=args.full_page)
+        if args.selector:
+            locator = page.locator(args.selector).first
+            try:
+                locator.wait_for(state="visible", timeout=3000)
+                locator.screenshot(path=str(output_path))
+            except Exception as e:
+                # Fall back to a full-viewport shot so there's something to inspect,
+                # but never report success — the requested element wasn't captured.
+                page.screenshot(path=str(output_path))
+                print(
+                    f"ERROR: selector {args.selector!r} matched no visible element "
+                    f"({type(e).__name__}). Saved a full-viewport shot instead for "
+                    f"context, but the element capture failed.",
+                    file=sys.stderr,
+                )
+                exit_code = 1
+        else:
+            page.screenshot(path=str(output_path), full_page=args.full_page)
         browser.close()
 
     # Print path so Claude Code can Read the image

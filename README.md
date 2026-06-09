@@ -9,7 +9,7 @@ A Claude Code plugin for visual verification of UI changes. Bundles a screenshot
 | `bin/screenshot` | Authenticated screenshot CLI via Playwright — auto-added to PATH |
 | `bin/screenshots` | Multi-page batch CLI — captures a list of pages in one go and builds an `index.html` grid |
 | `hooks/` | PostToolUse hook — reminds Claude to invoke `vischeck:verify` after view edits |
-| `skills/verify/` | `vischeck:verify` — screenshot workflow, dark/light mode guidance, playwright-cli testing |
+| `skills/verify/` | `vischeck:verify` — screenshot workflow + a strict review rubric (zoom into the component, compare against the house style, report findings by severity), dark/light mode guidance, playwright-cli testing |
 | `skills/setup-auth/` | `vischeck:setup-auth` — sets up the dev auth bypass route (Rails, Django, Flask, FastAPI) |
 
 ## Install
@@ -33,6 +33,7 @@ screenshot /dashboard                           # authenticated screenshot
 screenshot /dashboard --dark                    # dark color scheme
 screenshot /dashboard --width 375 --height 812  # mobile viewport
 screenshot /dashboard --full-page               # full scrollable page
+screenshot /dashboard --selector ".user-card"   # capture just one element, for close inspection
 screenshot /dashboard --port 8080               # non-default port
 screenshot /dashboard --no-auth                 # public page, skip login
 screenshot /dashboard --auth-url "/login?token={token}&next={path}"  # custom auth URL
@@ -53,6 +54,7 @@ screenshots --all                    # union of every group
 screenshots --list                   # list the groups defined in the config
 screenshots --config pages.yml       # explicit config file
 screenshots --dark                   # dark scheme for all pages
+screenshots --selector ".card"       # capture the same element on every page
 screenshots --workers 8              # more parallelism
 ```
 
@@ -99,7 +101,7 @@ groups:
 
 Select with `screenshots --group admin`, combine with `screenshots -g smoke,users` (or `--all`), and enumerate with `screenshots --list`. Overlapping paths across selected groups are captured once.
 
-**Option precedence** (most specific wins): per-entry override → group-level default → CLI flag → top-level global → built-in default. Override keys: `dark`, `full_page`, `width`, `height`, `no_auth`, `auth_url`. The dark variant of a path gets a `_dark` filename suffix so it doesn't collide with the light one. The command exits non-zero if any page fails to capture.
+**Option precedence** (most specific wins): per-entry override → group-level default → CLI flag → top-level global → built-in default. Override keys: `dark`, `full_page`, `width`, `height`, `no_auth`, `auth_url`, `selector`. The dark variant of a path gets a `_dark` filename suffix so it doesn't collide with the light one. The command exits non-zero if any page fails to capture.
 
 ## Dev auth
 

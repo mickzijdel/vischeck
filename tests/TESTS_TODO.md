@@ -1,8 +1,9 @@
 # Tests to add for `bin/screenshots`
 
-vischeck has no pytest suite yet. This file lists the tests that should be written
-for the batch tool — especially the **reusable groups** feature — so the pure
-parsing/resolution logic is covered without needing a live dev server.
+`tests/test_screenshots.py` now covers the selector overrides and a few resolve/parse
+cases. This file lists the **remaining** tests that should be written for the batch tool
+— especially the **reusable groups** feature — so the pure parsing/resolution logic is
+covered without needing a live dev server.
 
 ## Harness
 

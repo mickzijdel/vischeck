@@ -63,7 +63,7 @@ config/screenshots.yml format:
         dark: true
 
 Each page entry may be a plain path string or a mapping with per-entry overrides
-(path, dark, full_page, width, height, no_auth, auth_url). Option specificity:
+(path, dark, full_page, width, height, no_auth, auth_url, selector). Option specificity:
 per-entry > group default > CLI flag > top-level global > built-in default.
 Overlapping paths across selected groups are captured once (deduped by filename).
 
@@ -127,7 +127,7 @@ Searched for: {candidates}
 """
 
 # Per-entry override keys (everything except 'path').
-ENTRY_KEYS = ("dark", "full_page", "width", "height", "no_auth", "auth_url")
+ENTRY_KEYS = ("dark", "full_page", "width", "height", "no_auth", "auth_url", "selector")
 
 
 def find_sibling_screenshot():
@@ -310,6 +310,9 @@ def build_command(
         globals_dict.get("auth_url"),
         DEFAULT_AUTH_URL,
     )
+    selector = resolve(
+        entry, "selector", gd, args.selector, globals_dict.get("selector"), None
+    )
 
     # Invoke through `uv run --script` so the sibling resolves its OWN PEP 723
     # deps (playwright) — not this script's interpreter, which lacks them.
@@ -336,10 +339,16 @@ def build_command(
     ]
     if dark:
         cmd.append("--dark")
-    if full_page:
+    # An element shot is inherently bounded, so a selector wins over full_page
+    # (they're mutually exclusive in the single-page tool). Without this, a
+    # global `full_page: true` default plus `--selector` would emit both flags
+    # and the child would reject every page.
+    if full_page and not selector:
         cmd.append("--full-page")
     if no_auth:
         cmd.append("--no-auth")
+    if selector:
+        cmd.extend(["--selector", selector])
     return cmd, bool(dark)
 
 
@@ -488,6 +497,11 @@ def main():
     )
     parser.add_argument(
         "--no-auth", action="store_true", help="Skip authentication for all pages"
+    )
+    parser.add_argument(
+        "--selector",
+        default=None,
+        help="CSS selector: capture just this element on every page (close inspection)",
     )
     parser.add_argument(
         "--auth-url",
