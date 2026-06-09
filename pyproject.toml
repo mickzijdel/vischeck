@@ -23,6 +23,10 @@ dev = [
 
 [tool.uv]
 package = false
+# Supply-chain cooldown: don't resolve dependency versions published in the last 4 days,
+# so a malicious release is caught/yanked before we'd ever install it. Rolling duration
+# (moves with today). An existing uv.lock is honoured as-is; this only gates new resolves.
+exclude-newer = "4 days"
 
 [tool.ruff]
 # Extensionless Python scripts aren't discovered by a bare `ruff check .`. List the

@@ -16,7 +16,7 @@ jobs:
         # *.sh/*.bash plus extensionless shell scripts detected by shebang (bin/vischeck-hook)
         # — mirrors the hk `shellcheck-scripts` step so CI and pre-commit agree.
         run: |
-          files=$( { git ls-files '*.sh' '*.bash'; git ls-files ':!*.sh' ':!*.bash' | xargs -r grep -lE '^#!.*\b(ba)?sh\b' 2>/dev/null; } | sort -u )
+          files=$( { git ls-files '*.sh' '*.bash'; git ls-files ':!*.sh' ':!*.bash' | while IFS= read -r f; do head -n1 "$f" 2>/dev/null | grep -qE '^#!.*\b(ba)?sh\b' && printf '%s\n' "$f"; done; } | sort -u )
           if [ -n "$files" ]; then shellcheck $files; else echo "no shell files, skipping"; fi
       - name: Check formatting (shfmt)
         # shfmt's directory walk already detects extensionless shell scripts by shebang,
@@ -26,7 +26,7 @@ jobs:
         # *.py plus extensionless python/uv scripts (bin/screenshot, bin/screenshots)
         # detected by shebang — mirrors the hk ruff-*-scripts steps.
         run: |
-          files=$( { git ls-files '*.py'; git ls-files ':!*.py' | xargs -r grep -lE '^#!.*(python|uv run)' 2>/dev/null; } | sort -u )
+          files=$( { git ls-files '*.py'; git ls-files ':!*.py' | while IFS= read -r f; do head -n1 "$f" 2>/dev/null | grep -qE '^#!.*(python|uv run)' && printf '%s\n' "$f"; done; } | sort -u )
           if [ -n "$files" ]; then ruff check $files && ruff format --check $files; else echo "no python files, skipping"; fi
 
   test:
@@ -49,6 +49,8 @@ jobs:
         with:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # required to scan pull_request events
 
   # Noisier audits — mirror the hk `check` hook (not run on pre-commit).
   audit:
@@ -65,7 +67,7 @@ jobs:
         run: |
           # tracked .py + any tracked file with a python/uv shebang (e.g. bin/screenshot).
           # git ls-files excludes gitignored .venv automatically.
-          files=$( { git ls-files '*.py'; git ls-files | xargs -r grep -lE '^#!.*(python|uv run)' 2>/dev/null; } | sort -u )
+          files=$( { git ls-files '*.py'; git ls-files | while IFS= read -r f; do head -n1 "$f" 2>/dev/null | grep -qE '^#!.*(python|uv run)' && printf '%s\n' "$f"; done; } | sort -u )
           if [ -n "$files" ]; then uvx vulture --min-confidence 80 $files; else echo "no python files, skipping"; fi
       - name: Duplication (jscpd)
         # -f scopes to code formats (no config equivalent); .jscpd.json carries
