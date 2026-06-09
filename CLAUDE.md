@@ -14,8 +14,10 @@ Tooling is managed by **mise** + **hk** (dev-hooks:dev-env-setup standard v3). T
 spec'd `"latest"` in `mise.toml` and pinned in the committed `mise.lock`.
 
 - `mise install` — provision the toolchain (hk, gitleaks, shellcheck, shfmt, uv, ruff, node).
-- `hk install` — install the git pre-commit hook (runs the linters + gitleaks + large-file check).
-- `hk run check` — full check (linters + dead-code `vulture` + duplication `jscpd`); this is what CI runs.
+- `hk install` — install the git pre-commit hook (runs the linters + gitleaks + large-file check,
+  plus the dead-code `vulture` and duplication `jscpd` audits — both fast enough for every commit;
+  `jscpd` degrades gracefully when the npm registry is unreachable so offline commits aren't blocked).
+- `hk run check` — full check (same set as pre-commit under one name); this is what CI runs.
 - `uv run pytest` — run the test suite in `tests/` (each bundled script is exercised as a subprocess).
 
 **Linting covers the extensionless `bin/` scripts** via shebang detection: `bin/vischeck-hook`

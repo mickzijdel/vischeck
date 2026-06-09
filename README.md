@@ -137,8 +137,8 @@ reproducibly (resolved versions + checksums) in the committed `mise.lock`.
 
 ```bash
 mise install     # provision hk, gitleaks, shellcheck, shfmt, uv, ruff, node
-hk install       # install the git pre-commit hook
-hk run check     # lint + secret-scan + dead-code/duplication audit (what CI runs)
+hk install       # install the git pre-commit hook (lint + secret-scan + dead-code/duplication)
+hk run check     # the same full suite under one name (what CI runs)
 uv run pytest    # run the test suite for the bundled scripts
 ```
 
@@ -147,4 +147,5 @@ Python (`requires-python >= 3.11`) — `bin/screenshot` uses **Playwright**, `bi
 uses **PyYAML** — installed on first run by `uv`, plus the bash hook `bin/vischeck-hook`. All
 runtime deps are unpinned (resolved to latest by `uv`); the dev toolchain versions are pinned
 in `mise.lock`. Linting: `shellcheck`/`shfmt` (shell), `ruff` (Python), `gitleaks` (secrets),
-`vulture` + `jscpd` (audits) — see `hk.pkl` and `.github/workflows/ci.yml`.
+`vulture` + `jscpd` (audits, now on pre-commit too — `jscpd` skips gracefully when offline) —
+see `hk.pkl` and `.github/workflows/ci.yml`.
