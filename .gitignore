@@ -2,3 +2,6 @@ tmp/
 .DS_Store
 __pycache__/
 .pytest_cache/
+.venv/
+# machine-local mise overrides (mise.toml + mise.lock ARE committed)
+mise.local.toml

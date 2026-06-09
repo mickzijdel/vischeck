@@ -7,3 +7,22 @@ Make sure to check all of the following and make sure they are up-to-date after 
 6. tests/ — keep the pytest suite green and add coverage for behaviour you change
 
 Bump the plugin version on every commit. Patch version for small fixes, minor version for more substantial changes (new skill or tool).
+
+# Development
+
+Tooling is managed by **mise** + **hk** (dev-hooks:dev-env-setup standard v3). Tools are
+spec'd `"latest"` in `mise.toml` and pinned in the committed `mise.lock`.
+
+- `mise install` — provision the toolchain (hk, gitleaks, shellcheck, shfmt, uv, ruff, node).
+- `hk install` — install the git pre-commit hook (runs the linters + gitleaks + large-file check).
+- `hk run check` — full check (linters + dead-code `vulture` + duplication `jscpd`); this is what CI runs.
+- `uv run pytest` — run the test suite in `tests/` (each bundled script is exercised as a subprocess).
+
+**Linting covers the extensionless `bin/` scripts** via shebang detection: `bin/vischeck-hook`
+(bash) → `shellcheck`/`shfmt`; `bin/screenshot`, `bin/screenshots` (PEP 723 Python) → `ruff`.
+No glob tweaks needed when adding a new `bin/` script.
+
+**Key packages / versions:** the `bin/` Python scripts are PEP 723 (`requires-python >= 3.11`),
+deps unpinned (latest via `uv`): `bin/screenshot` → Playwright, `bin/screenshots` → PyYAML.
+Dev toolchain versions are pinned in `mise.lock`. Keep this list and README's "Built with" in
+sync with `mise.lock` / the scripts' PEP 723 blocks when they change.

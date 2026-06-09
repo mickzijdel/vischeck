@@ -126,3 +126,23 @@ Add a line to your project's `CLAUDE.md` so the hook gives the right advice:
 ```markdown
 ## UI: This app supports dark mode and light mode
 ```
+
+## Development
+
+Tooling is managed with [mise](https://mise.jdx.dev) and pre-commit hooks run via
+[hk](https://hk.jdx.dev). The toolchain is spec'd `"latest"` in `mise.toml` and pinned
+reproducibly (resolved versions + checksums) in the committed `mise.lock`.
+
+```bash
+mise install     # provision hk, gitleaks, shellcheck, shfmt, uv, ruff, node
+hk install       # install the git pre-commit hook
+hk run check     # lint + secret-scan + dead-code/duplication audit (what CI runs)
+uv run pytest    # run the test suite for the bundled scripts
+```
+
+**Built with:** the `bin/` scripts are self-contained [PEP 723](https://peps.python.org/pep-0723/)
+Python (`requires-python >= 3.11`) — `bin/screenshot` uses **Playwright**, `bin/screenshots`
+uses **PyYAML** — installed on first run by `uv`, plus the bash hook `bin/vischeck-hook`. All
+runtime deps are unpinned (resolved to latest by `uv`); the dev toolchain versions are pinned
+in `mise.lock`. Linting: `shellcheck`/`shfmt` (shell), `ruff` (Python), `gitleaks` (secrets),
+`vulture` + `jscpd` (audits) — see `hk.pkl` and `.github/workflows/ci.yml`.

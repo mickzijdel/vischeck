@@ -62,27 +62,45 @@ def navigate(page, url):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Authenticated screenshot of a local dev page")
+    parser = argparse.ArgumentParser(
+        description="Authenticated screenshot of a local dev page"
+    )
     parser.add_argument("path", help="URL path to screenshot, e.g. /connections")
     parser.add_argument("--dark", action="store_true", help="Use dark color scheme")
-    parser.add_argument("--width", type=int, default=1280, help="Viewport width (default: 1280)")
-    parser.add_argument("--height", type=int, default=720, help="Viewport height (default: 720)")
-    parser.add_argument("--full-page", action="store_true", help="Capture full scrollable page")
+    parser.add_argument(
+        "--width", type=int, default=1280, help="Viewport width (default: 1280)"
+    )
+    parser.add_argument(
+        "--height", type=int, default=720, help="Viewport height (default: 720)"
+    )
+    parser.add_argument(
+        "--full-page", action="store_true", help="Capture full scrollable page"
+    )
     parser.add_argument("--output", "-o", help="Custom output path")
-    parser.add_argument("--host", default="localhost", help="Dev server host (default: localhost)")
-    parser.add_argument("--port", type=int, default=3000, help="Dev server port (default: 3000)")
-    parser.add_argument("--wait", type=int, default=1500, help="Wait ms after page load (default: 1500)")
+    parser.add_argument(
+        "--host", default="localhost", help="Dev server host (default: localhost)"
+    )
+    parser.add_argument(
+        "--port", type=int, default=3000, help="Dev server port (default: 3000)"
+    )
+    parser.add_argument(
+        "--wait", type=int, default=1500, help="Wait ms after page load (default: 1500)"
+    )
     parser.add_argument(
         "--auth-url",
         default="/dev_auth/login?token={token}&redirect_to={path}",
         help="Auth URL template. Use {token} and {path} placeholders. "
-             "(default: /dev_auth/login?token={token}&redirect_to={path})"
+        "(default: /dev_auth/login?token={token}&redirect_to={path})",
     )
-    parser.add_argument("--no-auth", action="store_true", help="Skip authentication (for public pages)")
+    parser.add_argument(
+        "--no-auth", action="store_true", help="Skip authentication (for public pages)"
+    )
     args = parser.parse_args()
 
     if not check_server(args.host, args.port):
-        print(f"ERROR: Dev server not running on {args.host}:{args.port}", file=sys.stderr)
+        print(
+            f"ERROR: Dev server not running on {args.host}:{args.port}", file=sys.stderr
+        )
         sys.exit(1)
 
     # Output to tmp/screenshots/ in the current working directory
@@ -95,7 +113,11 @@ def main():
     else:
         safe_path = args.path.strip("/").replace("/", "_") or "root"
         mode = "_dark" if args.dark else ""
-        size = f"_{args.width}x{args.height}" if (args.width != 1280 or args.height != 720) else ""
+        size = (
+            f"_{args.width}x{args.height}"
+            if (args.width != 1280 or args.height != 720)
+            else ""
+        )
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = screenshots_dir / f"{safe_path}{mode}{size}_{ts}.png"
 
@@ -106,7 +128,10 @@ def main():
         from playwright.sync_api import sync_playwright
     except ImportError:
         print("ERROR: Playwright not installed.", file=sys.stderr)
-        print("Install: pip install playwright && playwright install chromium", file=sys.stderr)
+        print(
+            "Install: pip install playwright && playwright install chromium",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     target = args.path if args.path.startswith("/") else f"/{args.path}"
@@ -162,11 +187,15 @@ def main():
                         )
                         exit_code = 1
                     elif on_target(status, final_url):
-                        print(f"NOTE: captured {target} (authenticated)", file=sys.stderr)
+                        print(
+                            f"NOTE: captured {target} (authenticated)", file=sys.stderr
+                        )
                     else:
                         # Still not on target after authenticating.
                         hint = (
-                            " (looks like a login page)" if looks_like_login(final_url) else ""
+                            " (looks like a login page)"
+                            if looks_like_login(final_url)
+                            else ""
                         )
                         print(
                             f"WARNING: still redirected to {final_url}{hint} after "

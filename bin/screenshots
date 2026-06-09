@@ -85,6 +85,7 @@ from pathlib import Path
 # PyYAML is only needed when reading a config file; CLI paths work without it.
 try:
     import yaml
+
     HAS_YAML = True
 except ImportError:
     HAS_YAML = False
@@ -268,28 +269,70 @@ def resolve(entry, key, group_defaults, cli_value, global_value, default):
     return default
 
 
-def build_command(screenshot_script, entry, group_defaults, output_path, args, globals_dict):
+def build_command(
+    screenshot_script, entry, group_defaults, output_path, args, globals_dict
+):
     """Build the argv to invoke the single-page `screenshot` tool for one entry."""
     gd = group_defaults
-    dark = resolve(entry, "dark", gd, True if args.dark else None, globals_dict.get("dark"), False)
-    full_page = resolve(entry, "full_page", gd, True if args.full_page else None, globals_dict.get("full_page"), False)
-    no_auth = resolve(entry, "no_auth", gd, True if args.no_auth else None, globals_dict.get("no_auth"), False)
-    width = resolve(entry, "width", gd, args.width, globals_dict.get("width"), DEFAULT_WIDTH)
-    height = resolve(entry, "height", gd, args.height, globals_dict.get("height"), DEFAULT_HEIGHT)
-    port = args.port if args.port is not None else globals_dict.get("port", DEFAULT_PORT)
-    auth_url = resolve(entry, "auth_url", gd, args.auth_url, globals_dict.get("auth_url"), DEFAULT_AUTH_URL)
+    dark = resolve(
+        entry, "dark", gd, True if args.dark else None, globals_dict.get("dark"), False
+    )
+    full_page = resolve(
+        entry,
+        "full_page",
+        gd,
+        True if args.full_page else None,
+        globals_dict.get("full_page"),
+        False,
+    )
+    no_auth = resolve(
+        entry,
+        "no_auth",
+        gd,
+        True if args.no_auth else None,
+        globals_dict.get("no_auth"),
+        False,
+    )
+    width = resolve(
+        entry, "width", gd, args.width, globals_dict.get("width"), DEFAULT_WIDTH
+    )
+    height = resolve(
+        entry, "height", gd, args.height, globals_dict.get("height"), DEFAULT_HEIGHT
+    )
+    port = (
+        args.port if args.port is not None else globals_dict.get("port", DEFAULT_PORT)
+    )
+    auth_url = resolve(
+        entry,
+        "auth_url",
+        gd,
+        args.auth_url,
+        globals_dict.get("auth_url"),
+        DEFAULT_AUTH_URL,
+    )
 
     # Invoke through `uv run --script` so the sibling resolves its OWN PEP 723
     # deps (playwright) — not this script's interpreter, which lacks them.
     cmd = [
-        "uv", "run", "--script", str(screenshot_script), entry["path"],
-        "-o", str(output_path),
-        "--host", args.host,
-        "--port", str(port),
-        "--width", str(width),
-        "--height", str(height),
-        "--wait", str(args.wait),
-        "--auth-url", auth_url,
+        "uv",
+        "run",
+        "--script",
+        str(screenshot_script),
+        entry["path"],
+        "-o",
+        str(output_path),
+        "--host",
+        args.host,
+        "--port",
+        str(port),
+        "--width",
+        str(width),
+        "--height",
+        str(height),
+        "--wait",
+        str(args.wait),
+        "--auth-url",
+        auth_url,
     ]
     if dark:
         cmd.append("--dark")
@@ -410,30 +453,76 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("paths", nargs="*", help="URL paths to screenshot (override the config file)")
-    parser.add_argument("--config", help="Path to a screenshots.yml (default: auto-discover in cwd)")
-    parser.add_argument("--host", default=DEFAULT_HOST, help="Dev server host (default: localhost)")
+    parser.add_argument(
+        "paths", nargs="*", help="URL paths to screenshot (override the config file)"
+    )
+    parser.add_argument(
+        "--config", help="Path to a screenshots.yml (default: auto-discover in cwd)"
+    )
+    parser.add_argument(
+        "--host", default=DEFAULT_HOST, help="Dev server host (default: localhost)"
+    )
     # port/width/height default to None so we can tell "user passed it" from "use config/default".
-    parser.add_argument("--port", type=int, default=None, help="Dev server port (default: 3000)")
-    parser.add_argument("--width", type=int, default=None, help="Viewport width (default: 1280)")
-    parser.add_argument("--height", type=int, default=None, help="Viewport height (default: 720)")
-    parser.add_argument("--wait", type=int, default=DEFAULT_WAIT_MS, help="Wait ms after load (default: 1500)")
-    parser.add_argument("--dark", action="store_true", help="Dark color scheme for all pages")
-    parser.add_argument("--full-page", action="store_true", help="Capture full scrollable page for all pages")
-    parser.add_argument("--no-auth", action="store_true", help="Skip authentication for all pages")
-    parser.add_argument("--auth-url", default=None,
-                        help="Auth URL template with {token} and {path} placeholders")
-    parser.add_argument("--workers", type=int, default=4, help="Parallel browser workers (default: 4)")
-    parser.add_argument("--group", "-g", action="append", default=None,
-                        help="Named group(s) from the config to capture (repeatable, comma-separated)")
-    parser.add_argument("--all", action="store_true", help="Capture the union of every group in the config")
-    parser.add_argument("--list", action="store_true", dest="list_groups",
-                        help="List the groups defined in the config and exit")
+    parser.add_argument(
+        "--port", type=int, default=None, help="Dev server port (default: 3000)"
+    )
+    parser.add_argument(
+        "--width", type=int, default=None, help="Viewport width (default: 1280)"
+    )
+    parser.add_argument(
+        "--height", type=int, default=None, help="Viewport height (default: 720)"
+    )
+    parser.add_argument(
+        "--wait",
+        type=int,
+        default=DEFAULT_WAIT_MS,
+        help="Wait ms after load (default: 1500)",
+    )
+    parser.add_argument(
+        "--dark", action="store_true", help="Dark color scheme for all pages"
+    )
+    parser.add_argument(
+        "--full-page",
+        action="store_true",
+        help="Capture full scrollable page for all pages",
+    )
+    parser.add_argument(
+        "--no-auth", action="store_true", help="Skip authentication for all pages"
+    )
+    parser.add_argument(
+        "--auth-url",
+        default=None,
+        help="Auth URL template with {token} and {path} placeholders",
+    )
+    parser.add_argument(
+        "--workers", type=int, default=4, help="Parallel browser workers (default: 4)"
+    )
+    parser.add_argument(
+        "--group",
+        "-g",
+        action="append",
+        default=None,
+        help="Named group(s) from the config to capture (repeatable, comma-separated)",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Capture the union of every group in the config",
+    )
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        dest="list_groups",
+        help="List the groups defined in the config and exit",
+    )
     args = parser.parse_args()
 
     screenshot_script = find_sibling_screenshot()
     if not screenshot_script.exists():
-        print(f"ERROR: sibling screenshot tool not found at {screenshot_script}", file=sys.stderr)
+        print(
+            f"ERROR: sibling screenshot tool not found at {screenshot_script}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     if shutil.which("uv") is None:
@@ -458,7 +547,10 @@ def main():
     def load():
         config_path = discover_config(args.config)
         if config_path is None:
-            print(CONFIG_FORMAT_HELP.format(candidates=", ".join(CONFIG_CANDIDATES)), file=sys.stderr)
+            print(
+                CONFIG_FORMAT_HELP.format(candidates=", ".join(CONFIG_CANDIDATES)),
+                file=sys.stderr,
+            )
             sys.exit(1)
         return (config_path,) + load_config(config_path)
 
@@ -495,7 +587,9 @@ def main():
             for entry in g["entries"]:
                 selection.append((entry, g["defaults"]))
         label = "all groups" if args.all else ", ".join(chosen)
-        print(f"Capturing {label} ({len(selection)} page(s) before dedup) from {config_path}.")
+        print(
+            f"Capturing {label} ({len(selection)} page(s) before dedup) from {config_path}."
+        )
     else:
         config_path, globals_dict, default_entries, groups = load()
         if default_entries:
@@ -513,7 +607,9 @@ def main():
 
     # --- Server preflight (fail fast before spawning workers) --------------
     host = args.host
-    port = args.port if args.port is not None else globals_dict.get("port", DEFAULT_PORT)
+    port = (
+        args.port if args.port is not None else globals_dict.get("port", DEFAULT_PORT)
+    )
     try:
         sock = socket.create_connection((host, port), timeout=2)
         sock.close()
@@ -531,12 +627,21 @@ def main():
     seen = set()  # dedup overlapping paths across selected groups, by output filename
     for entry, gdefaults in selection:
         # Peek dark to name the file; build_command returns the authoritative value.
-        _, dark = build_command(screenshot_script, entry, gdefaults, Path("placeholder"), args, globals_dict)
+        _, dark = build_command(
+            screenshot_script, entry, gdefaults, Path("placeholder"), args, globals_dict
+        )
         filename = path_to_filename(entry["path"], dark)
         if filename in seen:
             continue
         seen.add(filename)
-        cmd, _ = build_command(screenshot_script, entry, gdefaults, output_dir / filename, args, globals_dict)
+        cmd, _ = build_command(
+            screenshot_script,
+            entry,
+            gdefaults,
+            output_dir / filename,
+            args,
+            globals_dict,
+        )
         jobs.append((len(jobs), entry["path"], filename, cmd))
 
     # --- Capture in parallel ------------------------------------------------

@@ -8,19 +8,23 @@ NEW_CONTENT=$(echo "$INPUT" | jq -r '.tool_input.new_string // .tool_input.conte
 IS_VIEW=false
 
 case "$FILE_PATH" in
-  *.erb|*.html.haml|*.html.slim|*.html|*.htm|*.jsx|*.tsx|*.vue|*.svelte)
-    IS_VIEW=true ;;
-  *.hbs|*.handlebars|*.ejs|*.pug|*.jade|*.njk|*.mustache|*.liquid|*.blade.php|*.twig)
-    IS_VIEW=true ;;
+*.erb | *.html.haml | *.html.slim | *.html | *.htm | *.jsx | *.tsx | *.vue | *.svelte)
+	IS_VIEW=true
+	;;
+*.hbs | *.handlebars | *.ejs | *.pug | *.jade | *.njk | *.mustache | *.liquid | *.blade.php | *.twig)
+	IS_VIEW=true
+	;;
 esac
 
 if [ "$IS_VIEW" = false ]; then
-  case "$FILE_PATH" in
-    */views/*|*/components/*|*/pages/*|*/layouts/*|*/partials/*)
-      IS_VIEW=true ;;
-    */app/javascript/controllers/*)
-      IS_VIEW=true ;;
-  esac
+	case "$FILE_PATH" in
+	*/views/* | */components/* | */pages/* | */layouts/* | */partials/*)
+		IS_VIEW=true
+		;;
+	*/app/javascript/controllers/*)
+		IS_VIEW=true
+		;;
+	esac
 fi
 
 [ "$IS_VIEW" = false ] && exit 0
@@ -29,15 +33,15 @@ fi
 DARK_MODE_NOTE=""
 PROJECT_CLAUDE_MD="$(pwd)/CLAUDE.md"
 if [ -f "$PROJECT_CLAUDE_MD" ] && grep -qiE 'dark.?mode|light.?mode|color.?scheme|colour.?scheme' "$PROJECT_CLAUDE_MD"; then
-  DARK_MODE_NOTE=" This project has dark/light mode support documented in CLAUDE.md — consider taking screenshots in both color schemes."
+	DARK_MODE_NOTE=" This project has dark/light mode support documented in CLAUDE.md — consider taking screenshots in both color schemes."
 else
-  DARK_MODE_NOTE=" CLAUDE.md doesn't mention dark/light mode — if this project supports it, consider adding a note (e.g. \`## UI: This app supports dark mode and light mode\`)."
+	DARK_MODE_NOTE=" CLAUDE.md doesn't mention dark/light mode — if this project supports it, consider adding a note (e.g. \`## UI: This app supports dark mode and light mode\`)."
 fi
 
 # Check for interactive elements
 INTERACTIVE_NOTE=""
 if echo "$NEW_CONTENT" | grep -qiE 'form_with|form_for|form_tag|<form|<input|<button|<select|<textarea|submit|text_field|email_field|password_field|check_box|radio_button|select_tag|data-action|onClick|onSubmit|@click|@submit|v-on:|handleSubmit'; then
-  INTERACTIVE_NOTE=" This edit includes interactive elements — consider testing the interaction with playwright-cli too."
+	INTERACTIVE_NOTE=" This edit includes interactive elements — consider testing the interaction with playwright-cli too."
 fi
 
 cat <<JSON

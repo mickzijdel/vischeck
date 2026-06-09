@@ -1,0 +1,34 @@
+# Dev-tooling manifest only (readoc-style). The plugin's scripts/CLIs stay
+# self-contained — Python ones use PEP 723 inline deps and run via `uv run --script`
+# (shebang: #!/usr/bin/env -S uv run --script). This file exists purely so contributors
+# get a reproducible test/lint environment; it declares no runtime dependencies and is
+# never built or installed (package = false).
+[project]
+name = "vischeck"
+version = "0.0.0"
+description = "Dev tooling for the vischeck Claude Code plugin."
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+    "vulture",   # dead-code audit; run via `uv run vulture`
+    # Mirror here the libraries the bundled bin/ scripts declare in their PEP 723
+    # blocks, so the test/lint environment can import/run them.
+    "playwright", # bin/screenshot
+    "pyyaml",     # bin/screenshots
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+# Extensionless Python scripts aren't discovered by a bare `ruff check .`. List the
+# *Python* bin/ scripts explicitly (NOT bin/vischeck-hook, which is bash — ruff would
+# fail to parse it). hk/CI also lint these via shebang detection regardless.
+extend-include = ["bin/screenshot", "bin/screenshots"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
