@@ -92,12 +92,12 @@ Check this project's CLAUDE.md for any mention of dark mode or light mode:
 ## CLI reference
 
 ```bash
-screenshot /path                           # authenticated screenshot (default port 3000)
+screenshot /path                           # authenticated screenshot (port from $PORT, else 3000)
 screenshot /path --dark                    # dark color scheme
 screenshot /path --width 375 --height 812  # mobile viewport
 screenshot /path --full-page               # full scrollable page
 screenshot /path --selector ".card"        # just one element, for close inspection
-screenshot /path --port 8080               # custom port
+screenshot /path --port 8080               # custom port (overrides $PORT)
 screenshot /path --no-auth                 # skip authentication (public pages)
 screenshot /path --auth-url "/login?token={token}&next={path}"  # custom auth URL template
 

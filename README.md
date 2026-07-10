@@ -34,7 +34,7 @@ screenshot /dashboard --dark                    # dark color scheme
 screenshot /dashboard --width 375 --height 812  # mobile viewport
 screenshot /dashboard --full-page               # full scrollable page
 screenshot /dashboard --selector ".user-card"   # capture just one element, for close inspection
-screenshot /dashboard --port 8080               # non-default port
+screenshot /dashboard --port 8080               # override the port ($PORT is the default, else 3000)
 screenshot /dashboard --no-auth                 # public page, skip login
 screenshot /dashboard --auth-url "/login?token={token}&next={path}"  # custom auth URL
 ```

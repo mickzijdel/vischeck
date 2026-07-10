@@ -38,3 +38,43 @@ def test_selector_and_full_page_are_mutually_exclusive(mod, monkeypatch, capsys)
         mod.main()
     assert exc.value.code == 1
     assert "mutually exclusive" in capsys.readouterr().err
+
+
+def _capture_probe(mod, monkeypatch):
+    """Stub the server preflight so main() exits before Playwright, recording host/port."""
+    captured = {}
+
+    def fake_check(host, port):
+        captured["host"], captured["port"] = host, port
+        return False  # a "down" server aborts with exit 1, before any browser work
+
+    monkeypatch.setattr(mod, "check_server", fake_check)
+    return captured
+
+
+def test_port_defaults_to_env_PORT(mod, monkeypatch):
+    """With no --port, the dev-server port comes from $PORT (set per-worktree via mise)."""
+    captured = _capture_probe(mod, monkeypatch)
+    monkeypatch.setenv("PORT", "4321")
+    monkeypatch.setattr("sys.argv", ["screenshot", "/x"])
+    with pytest.raises(SystemExit):
+        mod.main()
+    assert captured["port"] == 4321
+
+
+def test_explicit_port_overrides_env_PORT(mod, monkeypatch):
+    captured = _capture_probe(mod, monkeypatch)
+    monkeypatch.setenv("PORT", "4321")
+    monkeypatch.setattr("sys.argv", ["screenshot", "/x", "--port", "5000"])
+    with pytest.raises(SystemExit):
+        mod.main()
+    assert captured["port"] == 5000
+
+
+def test_port_falls_back_to_3000_without_env(mod, monkeypatch):
+    captured = _capture_probe(mod, monkeypatch)
+    monkeypatch.delenv("PORT", raising=False)
+    monkeypatch.setattr("sys.argv", ["screenshot", "/x"])
+    with pytest.raises(SystemExit):
+        mod.main()
+    assert captured["port"] == 3000

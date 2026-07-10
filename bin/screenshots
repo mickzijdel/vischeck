@@ -73,6 +73,7 @@ tmp/screenshots/batch_<timestamp>/ in the current working directory.
 
 import argparse
 import html
+import os
 import shutil
 import socket
 import subprocess
@@ -91,7 +92,8 @@ except ImportError:
     HAS_YAML = False
 
 DEFAULT_HOST = "localhost"
-DEFAULT_PORT = 3000
+# $PORT (set per-worktree via mise) is the default; --port and a YAML `port:` still win.
+DEFAULT_PORT = int(os.environ.get("PORT") or 3000)
 DEFAULT_WIDTH = 1280
 DEFAULT_HEIGHT = 720
 DEFAULT_WAIT_MS = 1500

@@ -409,3 +409,18 @@ def test_group_comma_and_repeat_flatten_identically(mod, monkeypatch, tmp_path, 
     repeat = capsys.readouterr().out
     assert "Capturing a, b (2 page(s) before dedup)" in comma
     assert "Capturing a, b (2 page(s) before dedup)" in repeat
+
+
+# --- DEFAULT_PORT reads $PORT so per-worktree ports are picked up automatically ---
+
+
+def test_default_port_reads_env_PORT(monkeypatch):
+    """The base of the port precedence chain honors $PORT (set per-worktree via mise);
+    an explicit --port or a YAML `port:` still overrides it."""
+    monkeypatch.setenv("PORT", "4321")
+    assert load_screenshots_module().DEFAULT_PORT == 4321
+
+
+def test_default_port_falls_back_to_3000(monkeypatch):
+    monkeypatch.delenv("PORT", raising=False)
+    assert load_screenshots_module().DEFAULT_PORT == 3000

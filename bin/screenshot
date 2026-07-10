@@ -87,7 +87,10 @@ def main():
         "--host", default="localhost", help="Dev server host (default: localhost)"
     )
     parser.add_argument(
-        "--port", type=int, default=3000, help="Dev server port (default: 3000)"
+        "--port",
+        type=int,
+        default=int(os.environ.get("PORT") or 3000),
+        help="Dev server port (default: $PORT, else 3000)",
     )
     parser.add_argument(
         "--wait", type=int, default=1500, help="Wait ms after page load (default: 1500)"
