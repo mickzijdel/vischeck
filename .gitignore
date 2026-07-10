@@ -5,3 +5,4 @@ __pycache__/
 .venv/
 # machine-local mise overrides (mise.toml + mise.lock ARE committed)
 mise.local.toml
+.worktrees/
