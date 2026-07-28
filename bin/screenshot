@@ -11,7 +11,10 @@ Usage:
   screenshot /connections --dark
   screenshot /connections --width 375 --height 812
   screenshot /connections --full-page
-  screenshot /connections --selector ".search-form"   # just one component
+  screenshot /connections --selector ".search-form"           # just one component
+  screenshot /connections --selector ".search-form" --dpr 2   # close inspection
+  screenshot /connections --sweep                   # measure the layout, don't eyeball it
+  screenshot /connections --squint                  # blurred, for the grouping/rhythm test
   screenshot /admin/users -o tmp/screenshots/custom.png
   screenshot /dashboard --port 8000 --auth-url "/dev-login?token=secret&next={path}"
 
@@ -21,9 +24,16 @@ redirects to a login page or returns 401/403. Screenshots are saved to
 tmp/screenshots/ in the current working directory. It exits non-zero (while
 still saving the image for inspection) if the captured page is an HTTP error
 or an unresolved auth wall, so a bad capture is never reported as success.
+
+`--sweep` additionally measures the rendered layout in the DOM and prints
+numeric violations (overflow, misalignment, sibling-height drift, elements
+short of full width, fixed-bar overlap, sub-44px tap targets, clipped text,
+off-centre content). Half of a visual review is arithmetic, and arithmetic
+done by eye is where a 12px error survives a confident "looks good".
 """
 
 import argparse
+import json
 import os
 import re
 import socket
@@ -31,6 +41,325 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
+
+# ---------------------------------------------------------------------------
+# Measurement sweep
+# ---------------------------------------------------------------------------
+# Injected once per page. Returns a list of findings, each tagged:
+#   "defect" — measured against a selector the caller named, so the intended
+#              layout is known and the number is a verdict;
+#   "lead"   — found by auto-detection, or inherently ambiguous (a gap may be a
+#              deliberate optical adjustment), so it needs visual confirmation
+#              before it belongs in a report.
+SWEEP_JS = r"""
+(opts) => {
+  const { rowSel, alignSel, fullWidthSel, fixedSel, contentSel, pairs, tol, maxNodes } = opts;
+  const out = [];
+  const rect = (el) => el.getBoundingClientRect();
+  const round = (n) => Math.round(n * 10) / 10;
+  const docEl = document.documentElement;
+
+  const visible = (el) => {
+    const r = rect(el);
+    if (r.width <= 0 || r.height <= 0) return false;
+    const cs = getComputedStyle(el);
+    return cs.visibility !== 'hidden' && cs.display !== 'none';
+  };
+
+  const label = (el) => {
+    if (!el) return '?';
+    const id = el.id ? '#' + el.id : '';
+    const cn = typeof el.className === 'string' ? el.className.trim() : '';
+    const cls = cn ? '.' + cn.split(/\s+/).slice(0, 2).join('.') : '';
+    return el.tagName.toLowerCase() + id + cls;
+  };
+
+  // Keep only the deepest matches: an overflowing child also overflows every
+  // ancestor, and a report listing the whole chain buries the actual culprit.
+  const deepest = (els) => els.filter((el) => !els.some((o) => o !== el && el.contains(o)));
+
+  // Where the element's *content* starts, not its border box. Two blocks whose
+  // text lines up may have different box edges (and vice versa), so alignment
+  // findings quote both rather than picking one and being wrong half the time.
+  const contentLeft = (el) => {
+    const cs = getComputedStyle(el);
+    return rect(el).left + (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.paddingLeft) || 0);
+  };
+
+  const median = (ns) => {
+    const s = [...ns].sort((a, b) => a - b);
+    return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+  };
+
+  // --- list containers ------------------------------------------------------
+  // With --sweep-rows the caller named the lists, so drift is a defect. Without
+  // it, guess at same-tag sibling groups and downgrade the findings to leads.
+  const rowsExplicit = Boolean(rowSel);
+  const containers = rowsExplicit
+    ? [...document.querySelectorAll(rowSel)]
+    : [...document.querySelectorAll('ul,ol,tbody,[role="list"]')].filter((c) => {
+        const kids = [...c.children].filter(visible);
+        return kids.length >= 3 && new Set(kids.map((k) => k.tagName)).size === 1;
+      });
+  const rowSeverity = rowsExplicit ? 'defect' : 'lead';
+
+  for (const c of containers) {
+    const kids = [...c.children].filter(visible);
+    if (kids.length < 2) continue;
+
+    // Uniform sibling heights — a row that grows with a 2-line title while its
+    // neighbours don't.
+    const hs = kids.map((el) => rect(el).height);
+    const hmax = Math.max(...hs), hmin = Math.min(...hs);
+    if (hmax - hmin > tol) {
+      out.push({ check: 'height-variance', severity: rowSeverity, container: label(c),
+                 min: round(hmin), max: round(hmax), delta: round(hmax - hmin),
+                 tallest: label(kids[hs.indexOf(hmax)]) });
+    }
+
+    // Sibling edge alignment, both rails. The classic left-edge miss is a row
+    // that indents because it lacks an icon its neighbours have; the right-edge
+    // one is a single control nudged out of the column the others form.
+    const targets = kids.map((el) => (alignSel ? el.querySelector(alignSel) : el)).filter(Boolean);
+    if (targets.length > 1) {
+      for (const edge of ['left', 'right']) {
+        const es = targets.map((el) => rect(el)[edge]);
+        const emax = Math.max(...es), emin = Math.min(...es);
+        if (emax - emin > tol) {
+          // The outlier is whichever end of the range only one row sits at.
+          const atMax = es.filter((v) => Math.abs(v - emax) <= tol).length;
+          const oddIndex = es.indexOf(atMax === 1 ? emax : emin);
+          out.push({ check: 'sibling-edge-misalign', severity: rowSeverity, edge,
+                     container: label(c), within: alignSel || '(the row itself)',
+                     min: round(emin), max: round(emax), delta: round(emax - emin),
+                     outlier: label(targets[oddIndex]) });
+        }
+      }
+    }
+
+    // Vertical rhythm: one gap roughly double its neighbours is a stray margin
+    // or an extra wrapper, not a design decision. Spacing is partly taste, so
+    // this stays a lead — but "which gap" is arithmetic, not a judgment call.
+    if (kids.length >= 3) {
+      const gaps = [];
+      for (let i = 1; i < kids.length; i++) gaps.push(rect(kids[i]).top - rect(kids[i - 1]).bottom);
+      const mid = median(gaps);
+      const worst = Math.max(...gaps);
+      if (mid > 0 && worst >= mid * 2 && worst - mid > tol) {
+        out.push({ check: 'gap-outlier', severity: 'lead', container: label(c),
+                   gapPx: round(worst), typicalPx: round(mid),
+                   afterRow: gaps.indexOf(worst) + 1 });
+      }
+    }
+  }
+
+  // --- elements that should reach their container's content edge ------------
+  if (fullWidthSel) {
+    for (const el of document.querySelectorAll(fullWidthSel)) {
+      const p = el.parentElement;
+      if (!p || !visible(el)) continue;
+      const cs = getComputedStyle(p);
+      const contentRight = rect(p).right - (parseFloat(cs.paddingRight) || 0);
+      const short = contentRight - rect(el).right;
+      if (short > tol) {
+        out.push({ check: 'not-full-width', severity: 'defect', node: label(el),
+                   container: label(p), shortPx: round(short),
+                   elementRight: round(rect(el).right), contentRight: round(contentRight) });
+      }
+    }
+  }
+
+  // --- cross-region pairs that should share a left edge ---------------------
+  for (const [a, b] of pairs || []) {
+    const ea = document.querySelector(a), eb = document.querySelector(b);
+    if (!ea || !eb) {
+      out.push({ check: 'align-pair-missing', severity: 'lead', pair: `${a} | ${b}`,
+                 note: (!ea ? a : b) + ' matched nothing' });
+      continue;
+    }
+    const boxDelta = rect(ea).left - rect(eb).left;
+    const textDelta = contentLeft(ea) - contentLeft(eb);
+    if (Math.abs(boxDelta) > tol || Math.abs(textDelta) > tol) {
+      out.push({ check: 'pair-edge-misalign', severity: 'defect', pair: `${a} | ${b}`,
+                 boxLeft: `${round(rect(ea).left)} vs ${round(rect(eb).left)}`,
+                 boxDelta: round(boxDelta),
+                 contentLeft: `${round(contentLeft(ea))} vs ${round(contentLeft(eb))}`,
+                 contentDelta: round(textDelta) });
+    }
+  }
+
+  // --- fixed / sticky bars covering content --------------------------------
+  // Auto-detects bar-like fixed/sticky elements (at least half the viewport
+  // wide) when no selector is given. A full-page capture cannot reproduce a
+  // fixed bar's real position at all, so this has to be measured.
+  const bars = fixedSel
+    ? [...document.querySelectorAll(fixedSel)].filter(visible)
+    : [...document.querySelectorAll('body *')].filter((el) => {
+        const cs = getComputedStyle(el);
+        if (cs.position !== 'fixed' && cs.position !== 'sticky') return false;
+        if (!visible(el)) return false;
+        const r = rect(el);
+        return r.width >= innerWidth * 0.5 && r.height > 8;
+      });
+  const barSeverity = fixedSel ? 'defect' : 'lead';
+  const scope = document.querySelector('main,[role="main"]') || document.body;
+
+  for (const bar of bars) {
+    const b = rect(bar);
+    const hits = deepest([...scope.querySelectorAll('*')].filter((el) => {
+      if (bar.contains(el) || el.contains(bar) || !visible(el)) return false;
+      if (!el.textContent || !el.textContent.trim()) return false;
+      const r = rect(el);
+      return r.top < b.bottom - tol && r.bottom > b.top + tol
+          && r.left < b.right - tol && r.right > b.left + tol;
+    }));
+    if (hits.length) {
+      out.push({ check: 'fixed-bar-overlap', severity: barSeverity, bar: label(bar),
+                 barTop: round(b.top), barBottom: round(b.bottom), count: hits.length,
+                 nodes: hits.slice(0, maxNodes).map(label) });
+    }
+  }
+
+  // --- the page is wider than the viewport ----------------------------------
+  const overflow = docEl.scrollWidth - docEl.clientWidth;
+  if (overflow > tol) {
+    const wide = deepest([...document.querySelectorAll('body *')].filter(
+      (el) => visible(el) && getComputedStyle(el).position !== 'fixed'
+              && rect(el).right > docEl.clientWidth + tol));
+    out.push({ check: 'horizontal-overflow', severity: 'defect', byPx: round(overflow),
+               nodes: wide.slice(0, maxNodes).map(
+                 (el) => `${label(el)} right=${round(rect(el).right)}`) });
+  }
+
+
+  // --- content swallowed by `overflow: hidden` ------------------------------
+  // Two defects hide behind one property. Horizontally: a label truncated
+  // mid-word with no ellipsis, or a too-wide pill cut off at a card's edge —
+  // the card clips it, so the *document* never overflows and nothing else
+  // notices. Vertically: a card with `height: 76px; overflow: hidden` swallows
+  // a 3-line title while its box stays exactly as tall as its neighbours', so
+  // the height-variance check stays clean and the screenshot just looks like a
+  // shorter title.
+  // No `deepest` here: a card clipping a too-wide pill and a label inside that
+  // same card truncating mid-word are two separate defects, and collapsing the
+  // ancestor away would report only the smaller one.
+  const clipInfo = new Map();
+  const clipAmount = new Map();
+  const clipped = [...document.querySelectorAll('body *')].filter((el) => {
+    if (!visible(el) || !el.textContent || !el.textContent.trim()) return false;
+    const cs = getComputedStyle(el);
+    // Line-clamped text is deliberate truncation and renders its own ellipsis.
+    if (cs.webkitLineClamp && cs.webkitLineClamp !== 'none') return false;
+    const overX = cs.overflowX === 'hidden' && cs.textOverflow !== 'ellipsis'
+                  && el.scrollWidth > el.clientWidth + tol;
+    const overY = cs.overflowY === 'hidden' && el.scrollHeight > el.clientHeight + tol;
+    if (!overX && !overY) return false;
+    const byX = el.scrollWidth - el.clientWidth, byY = el.scrollHeight - el.clientHeight;
+    clipInfo.set(el, overX
+      ? `cut off ${Math.round(byX)}px horizontally "${el.textContent.trim().slice(0, 30)}"`
+      : `cut off ${Math.round(byY)}px vertically (needs ${el.scrollHeight}px, has ${el.clientHeight}px)`);
+    clipAmount.set(el, overX ? byX : byY);
+    return true;
+  });
+  if (clipped.length) {
+    // Worst clip first — 122px of a swallowed sentence outranks a 4px shave.
+    clipped.sort((a, b) => clipAmount.get(b) - clipAmount.get(a));
+    out.push({ check: 'content-clipped', severity: 'lead', count: clipped.length,
+               nodes: clipped.slice(0, maxNodes).map((el) => `${label(el)} ${clipInfo.get(el)}`) });
+  }
+
+  // --- tap targets under 44 CSS px -----------------------------------------
+  // The hit box is invisible in a screenshot, so this can only be measured.
+  const small = new Map();
+  for (const el of document.querySelectorAll(
+        'a,button,[role="button"],input:not([type="hidden"]),select,textarea,summary')) {
+    if (!visible(el)) continue;
+    const r = rect(el);
+    if (r.width >= 44 && r.height >= 44) continue;
+    const key = `${label(el)} ${Math.round(r.width)}x${Math.round(r.height)}`;
+    small.set(key, (small.get(key) || 0) + 1);
+  }
+  if (small.size) {
+    out.push({ check: 'small-tap-target', severity: 'lead', viewportWidth: innerWidth,
+               count: [...small.values()].reduce((a, b) => a + b, 0),
+               nodes: [...small.entries()].slice(0, maxNodes)
+                        .map(([k, n]) => (n > 1 ? `${k} (x${n})` : k)) });
+  }
+
+  // --- layout balance on a sparse screen ------------------------------------
+  // A login card or empty state at 40vh reads as "roughly centred" in a
+  // thumbnail while sitting ~90px too high on a 900px screen. Measure it.
+  if (contentSel) {
+    const el = document.querySelector(contentSel);
+    if (!el) {
+      out.push({ check: 'content-missing', severity: 'lead', sel: contentSel,
+                 note: 'matched nothing — layout balance not measured' });
+    } else {
+      const r = rect(el);
+      const above = r.top, below = innerHeight - r.bottom, emptyV = above + below;
+      if (emptyV > 120 && Math.abs(above - below) > Math.max(24, emptyV * 0.15)) {
+        out.push({ check: 'vertical-imbalance', severity: 'defect', sel: contentSel,
+                   above: round(above), below: round(below),
+                   hint: above < below ? 'sits too high' : 'sits too low' });
+      }
+      const left = r.left, right = innerWidth - r.right, emptyH = left + right;
+      if (emptyH > 120 && Math.abs(left - right) > Math.max(24, emptyH * 0.1)) {
+        out.push({ check: 'horizontal-imbalance', severity: 'defect', sel: contentSel,
+                   left: round(left), right: round(right),
+                   hint: left < right ? 'sits too far left' : 'sits too far right' });
+      }
+    }
+  }
+
+  return out;
+}
+"""
+
+# One line per check, so the report says what the number means instead of
+# making the reader infer it from a key name.
+SWEEP_HINTS = {
+    "height-variance": "sibling rows differ in height",
+    "sibling-edge-misalign": "one row breaks the edge column its siblings form",
+    "gap-outlier": "one gap in a list is roughly double its neighbours",
+    "content-clipped": "`overflow: hidden` is swallowing content",
+    "not-full-width": "element stops short of its container's content edge",
+    "pair-edge-misalign": "elements that should share a left edge don't",
+    "align-pair-missing": "a --sweep-pair selector matched nothing",
+    "fixed-bar-overlap": "a fixed/sticky bar covers content",
+    "horizontal-overflow": "the page is wider than the viewport",
+    "small-tap-target": "interactive element under 44x44 CSS px",
+    "vertical-imbalance": "content is not centred in its empty space",
+    "horizontal-imbalance": "content is not centred in its empty space",
+    "content-missing": "--sweep-content matched nothing",
+}
+
+
+def format_sweep(findings, width, height):
+    """Render sweep findings as a compact text report."""
+    if not findings:
+        return f"SWEEP clean at {width}x{height} — no measured violations."
+
+    defects = [f for f in findings if f.get("severity") == "defect"]
+    leads = [f for f in findings if f.get("severity") != "defect"]
+    lines = [
+        f"SWEEP {len(findings)} finding(s) at {width}x{height} — "
+        f"{len(defects)} defect(s), {len(leads)} lead(s) to confirm visually."
+    ]
+    for finding in defects + leads:
+        check = finding.get("check", "?")
+        detail = ", ".join(
+            f"{k}={v}"
+            for k, v in finding.items()
+            if k not in ("check", "severity", "nodes")
+        )
+        lines.append(
+            f"  [{finding.get('severity')}] {check} — {SWEEP_HINTS.get(check, '')}"
+        )
+        if detail:
+            lines.append(f"      {detail}")
+        for node in finding.get("nodes", []):
+            lines.append(f"      · {node}")
+    return "\n".join(lines)
 
 
 def check_server(host, port):
@@ -55,14 +384,56 @@ def looks_like_login(url):
     return bool(LOGIN_RE.search(urlparse(url).path))
 
 
-def navigate(page, url):
-    """Navigate and return (status, final_url). status is None for same-document navs."""
-    resp = page.goto(url, wait_until="networkidle", timeout=15000)
-    status = resp.status if resp else None
-    return status, page.url
+def navigate(page, url, nav):
+    """Navigate and return (status, final_url). status is None for same-document navs.
+
+    `nav` is a one-key dict holding the current wait_until mode, so a fallback
+    sticks for the rest of the run. `networkidle` never settles on an app with
+    long-polling, a reconnecting websocket, or analytics beacons, so a timeout
+    there is downgraded to `load` with a note rather than killing the capture.
+    """
+    try:
+        resp = page.goto(url, wait_until=nav["wait_until"], timeout=15000)
+    except Exception as e:
+        if nav["wait_until"] != "networkidle" or "Timeout" not in type(e).__name__:
+            raise
+        print(
+            "NOTE: networkidle never settled (long-polling, a websocket, or analytics "
+            "keeps the network busy) — falling back to 'load' for this run. Pass "
+            "--wait-until load to skip the wasted wait.",
+            file=sys.stderr,
+        )
+        nav["wait_until"] = "load"
+        resp = page.goto(url, wait_until="load", timeout=15000)
+    return (resp.status if resp else None), page.url
 
 
-def main():
+def settle(page, ready_selector, wait_ms):
+    """Wait for a semantic postcondition, then a bounded settle.
+
+    Capturing mid-load produces false "clipping/empty" findings, and capturing
+    before webfonts swap in measures the fallback font's metrics. Returns an
+    error string if the ready selector never appeared, else None.
+    """
+    problem = None
+    if ready_selector:
+        try:
+            page.locator(ready_selector).first.wait_for(state="visible", timeout=10000)
+        except Exception as e:
+            problem = (
+                f"ready selector {ready_selector!r} never became visible "
+                f"({type(e).__name__}) — the page may not have reached the state "
+                f"you meant to capture."
+            )
+    try:
+        page.evaluate("() => document.fonts && document.fonts.ready")
+    except Exception:
+        pass  # Font Loading API is optional; a missing one is not a capture failure.
+    page.wait_for_timeout(wait_ms)
+    return problem
+
+
+def build_parser():
     parser = argparse.ArgumentParser(
         description="Authenticated screenshot of a local dev page"
     )
@@ -75,12 +446,30 @@ def main():
         "--height", type=int, default=720, help="Viewport height (default: 720)"
     )
     parser.add_argument(
+        "--dpr",
+        type=float,
+        default=1.0,
+        help="Device pixel ratio (default: 1). Use 2 with --selector for close "
+        "inspection — hairlines, small gaps and fractional edges only resolve at 2x.",
+    )
+    parser.add_argument(
         "--full-page", action="store_true", help="Capture full scrollable page"
     )
     parser.add_argument(
         "--selector",
         help="CSS selector: capture just this element (for close inspection of one "
         "component). Mutually exclusive with --full-page.",
+    )
+    parser.add_argument(
+        "--squint",
+        type=float,
+        nargs="?",
+        const=7.0,
+        default=None,
+        metavar="RADIUS",
+        help="Blur the page by RADIUS px (default 7) before capturing — the squint "
+        "test for grouping and rhythm. Related elements should merge into one "
+        "blob, unrelated ones stay separate.",
     )
     parser.add_argument("--output", "-o", help="Custom output path")
     parser.add_argument(
@@ -96,6 +485,26 @@ def main():
         "--wait", type=int, default=1500, help="Wait ms after page load (default: 1500)"
     )
     parser.add_argument(
+        "--wait-until",
+        choices=("load", "domcontentloaded", "networkidle", "commit"),
+        default="networkidle",
+        help="Navigation wait condition (default: networkidle, auto-downgraded to "
+        "'load' if it never settles)",
+    )
+    parser.add_argument(
+        "--ready-selector",
+        help="Wait for this selector to be visible before capturing — a semantic "
+        "postcondition beats a fixed timeout on a slow or async page.",
+    )
+    parser.add_argument(
+        "--scroll",
+        metavar="POS",
+        help="Scroll before capturing: 'bottom', 'top', or a pixel offset. A fixed "
+        "or sticky bar only covers content once the page is scrolled, and "
+        "--full-page cannot reproduce that position at all — so a bar that eats "
+        "the last row is invisible until you capture the real viewport here.",
+    )
+    parser.add_argument(
         "--auth-url",
         default="/dev_auth/login?token={token}&redirect_to={path}",
         help="Auth URL template. Use {token} and {path} placeholders. "
@@ -104,7 +513,152 @@ def main():
     parser.add_argument(
         "--no-auth", action="store_true", help="Skip authentication (for public pages)"
     )
-    args = parser.parse_args()
+
+    sweep = parser.add_argument_group(
+        "measurement sweep",
+        "Measure the rendered layout instead of eyeballing it. --sweep alone runs "
+        "the zero-config checks (overflow, clipped text, tap targets, fixed-bar "
+        "overlap, auto-detected list drift); the selectors below name the intended "
+        "layout, which turns ambiguous leads into verdicts.",
+    )
+    sweep.add_argument(
+        "--sweep", action="store_true", help="Run the measurement sweep after capture"
+    )
+    sweep.add_argument(
+        "--sweep-rows",
+        help="List container(s) whose children are rows/cards — checks sibling "
+        "height uniformity and left-edge alignment (default: auto-detect)",
+    )
+    sweep.add_argument(
+        "--sweep-align",
+        help="Inner element within each row whose left edge should be constant "
+        "across rows, e.g. '.label' (default: the row itself)",
+    )
+    sweep.add_argument(
+        "--sweep-full-width",
+        help="Element(s) meant to span their container, e.g. '.progress,.divider'",
+    )
+    sweep.add_argument(
+        "--sweep-fixed",
+        help="Fixed/sticky bar(s) to check for content overlap (default: auto-detect)",
+    )
+    sweep.add_argument(
+        "--sweep-content",
+        help="Primary content block on a sparse screen (login card, empty state, "
+        "hero) — checks it is centred in its empty space",
+    )
+    sweep.add_argument(
+        "--sweep-pair",
+        action="append",
+        metavar="A,B",
+        help="Two selectors that should share a left edge, comma-separated "
+        "(repeatable), e.g. '.breadcrumb,.artwork'",
+    )
+    sweep.add_argument(
+        "--sweep-tolerance",
+        type=float,
+        default=1.5,
+        help="Sub-pixel tolerance in CSS px before a delta counts (default: 1.5)",
+    )
+    sweep.add_argument(
+        "--sweep-json",
+        metavar="PATH",
+        help="Also write the raw findings as JSON to PATH",
+    )
+    return parser
+
+
+def parse_scroll(raw):
+    """Parse --scroll into a JS y-offset expression. Returns None when unset."""
+    if raw is None:
+        return None
+    value = raw.strip().lower()
+    if value == "top":
+        return "0"
+    if value == "bottom":
+        # Larger than any document; the browser clamps to the real maximum.
+        return "1e7"
+    try:
+        return str(int(value))
+    except ValueError:
+        print(
+            f"ERROR: --scroll expects 'top', 'bottom', or a pixel offset, got {raw!r}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+def parse_pairs(raw_pairs):
+    """Parse --sweep-pair 'a,b' arguments into [[a, b], ...]."""
+    pairs = []
+    for raw in raw_pairs or []:
+        parts = [p.strip() for p in raw.split(",")]
+        if len(parts) != 2 or not all(parts):
+            print(
+                f"ERROR: --sweep-pair expects exactly two comma-separated selectors, "
+                f"got {raw!r}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        pairs.append(parts)
+    return pairs
+
+
+def output_path_for(args):
+    """Where the capture lands: --output if given, else a descriptive name in tmp/."""
+    if args.output:
+        path = Path(args.output)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    screenshots_dir = Path.cwd() / "tmp" / "screenshots"
+    screenshots_dir.mkdir(parents=True, exist_ok=True)
+    safe_path = args.path.strip("/").replace("/", "_") or "root"
+    mode = "_dark" if args.dark else ""
+    size = (
+        f"_{args.width}x{args.height}"
+        if (args.width != 1280 or args.height != 720)
+        else ""
+    )
+    dpr = f"_{args.dpr:g}x" if args.dpr != 1.0 else ""
+    if args.selector:
+        sel_slug = re.sub(r"[^a-zA-Z0-9]+", "-", args.selector).strip("-")[:40]
+        sel = f"_sel-{sel_slug}" if sel_slug else "_sel"
+    else:
+        sel = ""
+    squint = "_squint" if args.squint else ""
+    scroll = f"_scroll-{args.scroll}" if args.scroll else ""
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return (
+        screenshots_dir / f"{safe_path}{mode}{size}{dpr}{sel}{squint}{scroll}_{ts}.png"
+    )
+
+
+def run_sweep(page, args):
+    """Run the measurement sweep, print the report, optionally save raw JSON."""
+    findings = page.evaluate(
+        SWEEP_JS,
+        {
+            "rowSel": args.sweep_rows,
+            "alignSel": args.sweep_align,
+            "fullWidthSel": args.sweep_full_width,
+            "fixedSel": args.sweep_fixed,
+            "contentSel": args.sweep_content,
+            "pairs": parse_pairs(args.sweep_pair),
+            "tol": args.sweep_tolerance,
+            "maxNodes": 8,
+        },
+    )
+    print(format_sweep(findings, args.width, args.height))
+    if args.sweep_json:
+        json_path = Path(args.sweep_json)
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(json.dumps(findings, indent=2))
+    return findings
+
+
+def main():
+    args = build_parser().parse_args()
 
     if args.selector and args.full_page:
         print(
@@ -114,35 +668,30 @@ def main():
         )
         sys.exit(1)
 
+    if args.scroll and args.full_page:
+        print(
+            "ERROR: --scroll and --full-page are mutually exclusive. --full-page "
+            "stitches the whole document and cannot show a fixed bar at a real "
+            "scroll position, which is the only reason to scroll before capturing.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if args.dpr <= 0:
+        print("ERROR: --dpr must be greater than 0.", file=sys.stderr)
+        sys.exit(1)
+
+    # Fail fast on malformed arguments, before spending a browser launch on them.
+    scroll_to = parse_scroll(args.scroll)
+    parse_pairs(args.sweep_pair)
+
     if not check_server(args.host, args.port):
         print(
             f"ERROR: Dev server not running on {args.host}:{args.port}", file=sys.stderr
         )
         sys.exit(1)
 
-    # Output to tmp/screenshots/ in the current working directory
-    screenshots_dir = Path.cwd() / "tmp" / "screenshots"
-    screenshots_dir.mkdir(parents=True, exist_ok=True)
-
-    if args.output:
-        output_path = Path(args.output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-    else:
-        safe_path = args.path.strip("/").replace("/", "_") or "root"
-        mode = "_dark" if args.dark else ""
-        size = (
-            f"_{args.width}x{args.height}"
-            if (args.width != 1280 or args.height != 720)
-            else ""
-        )
-        if args.selector:
-            sel_slug = re.sub(r"[^a-zA-Z0-9]+", "-", args.selector).strip("-")[:40]
-            sel = f"_sel-{sel_slug}" if sel_slug else "_sel"
-        else:
-            sel = ""
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = screenshots_dir / f"{safe_path}{mode}{size}{sel}_{ts}.png"
-
+    output_path = output_path_for(args)
     token = os.environ.get("DEV_AUTH_TOKEN", "claude-screenshot-token")
     base_url = f"http://{args.host}:{args.port}"
 
@@ -160,6 +709,7 @@ def main():
     target_url = f"{base_url}{target}"
     auth_path = args.auth_url.format(token=token, path=target)
     auth_url = f"{base_url}{auth_path}"
+    nav = {"wait_until": args.wait_until}
 
     def is_status_error(status):
         return status is not None and status >= 400
@@ -171,6 +721,7 @@ def main():
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             viewport={"width": args.width, "height": args.height},
+            device_scale_factor=args.dpr,
             color_scheme="dark" if args.dark else "light",
         )
         page = context.new_page()
@@ -179,11 +730,11 @@ def main():
         try:
             if args.no_auth:
                 # Explicit override: navigate the target directly, no auth dance.
-                status, final_url = navigate(page, target_url)
+                status, final_url = navigate(page, target_url, nav)
             else:
                 # Auto-detect: probe the target WITHOUT auth first. For public pages
                 # this single navigation is also the one we screenshot.
-                status, final_url = navigate(page, target_url)
+                status, final_url = navigate(page, target_url, nav)
 
                 redirected_away = norm(final_url) != norm(target)
                 auth_required = status in (401, 403) or redirected_away
@@ -196,7 +747,7 @@ def main():
                     pass
                 else:
                     # Auth appears required. Attempt the auth bypass route.
-                    status, final_url = navigate(page, auth_url)
+                    status, final_url = navigate(page, auth_url, nav)
 
                     if status == 404 and norm(final_url) == norm(auth_path):
                         # The auth route itself doesn't exist.
@@ -240,7 +791,37 @@ def main():
             )
             exit_code = 1
 
-        page.wait_for_timeout(args.wait)
+        not_ready = settle(page, args.ready_selector, args.wait)
+        if not_ready:
+            print(f"ERROR: {not_ready}", file=sys.stderr)
+            exit_code = 1
+
+        if scroll_to is not None:
+            # Scroll first, then let sticky headers and lazy content settle, so the
+            # sweep measures the same viewport the screenshot will show.
+            page.evaluate(f"() => window.scrollTo(0, {scroll_to})")
+            page.wait_for_timeout(300)
+
+        # Measure before blurring — the squint filter is for the eye, not the numbers.
+        if args.sweep:
+            try:
+                run_sweep(page, args)
+            except Exception as e:
+                print(
+                    f"ERROR: measurement sweep failed ({type(e).__name__}: {e}) — "
+                    f"the screenshot itself is still valid.",
+                    file=sys.stderr,
+                )
+                exit_code = 1
+
+        if args.squint:
+            # Real gaussian blur at native resolution, DPR-consistent (the radius
+            # is in CSS px) and with no external image tool in the loop.
+            page.evaluate(
+                "(r) => { document.documentElement.style.filter = `blur(${r}px)`; }",
+                args.squint,
+            )
+
         if args.selector:
             locator = page.locator(args.selector).first
             try:
@@ -261,7 +842,7 @@ def main():
             page.screenshot(path=str(output_path), full_page=args.full_page)
         browser.close()
 
-    # Print path so Claude Code can Read the image
+    # Print path so Claude Code can Read the image (always the last stdout line)
     print(str(output_path))
     sys.exit(exit_code)
 

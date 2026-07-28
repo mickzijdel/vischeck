@@ -24,6 +24,20 @@ Usage:
   screenshots --config pages.yml  # explicit config file
   screenshots --dark              # global default: dark scheme for all pages
 
+Review matrix. `--widths` and `--themes` cross every selected page with those
+axes, so one command covers screen x breakpoint x theme instead of a hand-typed
+grid that quietly skips cells:
+
+  screenshots -g smoke --widths 390,767,768,1280   # test breakpoint BOUNDARIES,
+                                                   # not just representatives —
+                                                   # failures live on the far side
+  screenshots -g smoke --themes light,dark         # never assume dark inherits
+  screenshots -g smoke --widths 390,1280 --sweep   # + measure every cell
+
+Scope the matrix before running it: fan out on the axis the change actually
+affects and hold the others at one representative value. The full cross-product
+is the worst case, not the default.
+
 Selection precedence:
   1. Positional CLI paths always win.
   2. Else --list / --group / --all act on the config's `groups:`.
@@ -63,16 +77,20 @@ config/screenshots.yml format:
         dark: true
 
 Each page entry may be a plain path string or a mapping with per-entry overrides
-(path, dark, full_page, width, height, no_auth, auth_url, selector). Option specificity:
-per-entry > group default > CLI flag > top-level global > built-in default.
-Overlapping paths across selected groups are captured once (deduped by filename).
+(path, dark, full_page, width, height, no_auth, auth_url, selector, dpr, scroll,
+ready_selector, squint). Option specificity: per-entry > group default > CLI flag >
+top-level global > built-in default. Overlapping paths across selected groups are
+captured once (deduped by filename).
 
 Output: all images plus an index.html grid land in
-tmp/screenshots/batch_<timestamp>/ in the current working directory.
+tmp/screenshots/batch_<timestamp>/ in the current working directory. With --sweep,
+each page's measured findings are written alongside it as <name>.sweep.json and
+summarised per cell in the console and the index.
 """
 
 import argparse
 import html
+import json
 import os
 import shutil
 import socket
@@ -129,7 +147,31 @@ Searched for: {candidates}
 """
 
 # Per-entry override keys (everything except 'path').
-ENTRY_KEYS = ("dark", "full_page", "width", "height", "no_auth", "auth_url", "selector")
+ENTRY_KEYS = (
+    "dark",
+    "full_page",
+    "width",
+    "height",
+    "no_auth",
+    "auth_url",
+    "selector",
+    "dpr",
+    "scroll",
+    "ready_selector",
+    "squint",
+)
+
+# Sweep options are matrix-wide, not per-page: you measure a whole matrix against
+# one description of the intended layout. Each maps to the same flag on the
+# single-page tool.
+SWEEP_PASSTHROUGH = (
+    "sweep_rows",
+    "sweep_align",
+    "sweep_full_width",
+    "sweep_fixed",
+    "sweep_content",
+    "sweep_tolerance",
+)
 
 
 def find_sibling_screenshot():
@@ -251,11 +293,82 @@ def load_config(config_path):
     return globals_dict, default_entries, groups
 
 
-def path_to_filename(path, dark):
-    """Convert a URL path to a safe filename. Dark variants get a _dark suffix."""
+def path_to_filename(path, dark, width=None, scroll=None):
+    """Convert a URL path to a safe filename naming the matrix cell it captures.
+
+    Every axis that varies within a batch has to reach the filename, or two
+    cells collide and the later one silently overwrites the earlier — which
+    reads as coverage while proving nothing.
+    """
     safe = path.strip("/").replace("/", "__") or "home"
-    suffix = "_dark" if dark else ""
-    return f"{safe}{suffix}.png"
+    parts = [safe]
+    if width is not None:
+        parts.append(f"w{width}")
+    parts.append("dark" if dark else None)
+    if scroll:
+        parts.append(f"scroll-{scroll}")
+    return "_".join(p for p in parts if p) + ".png"
+
+
+def parse_widths(raw):
+    """Parse --widths '390,768,1280' into [390, 768, 1280]."""
+    if not raw:
+        return None
+    widths = []
+    for chunk in raw.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            widths.append(int(chunk))
+        except ValueError:
+            print(
+                f"ERROR: --widths expects comma-separated integers, got {chunk!r}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    return widths or None
+
+
+def parse_themes(raw):
+    """Parse --themes 'light,dark' into [False, True] (i.e. the `dark` values)."""
+    if not raw:
+        return None
+    themes = []
+    for chunk in raw.split(","):
+        chunk = chunk.strip().lower()
+        if not chunk:
+            continue
+        if chunk not in ("light", "dark"):
+            print(
+                f"ERROR: --themes expects 'light' and/or 'dark', got {chunk!r}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        themes.append(chunk == "dark")
+    return themes or None
+
+
+def expand_matrix(selection, widths, themes):
+    """Cross the selected pages with the width and theme axes.
+
+    The expanded values land as per-entry overrides, which sit at the top of the
+    specificity chain — asking for a matrix is more specific than any default it
+    would otherwise inherit.
+    """
+    if not widths and not themes:
+        return selection
+    expanded = []
+    for entry, group_defaults in selection:
+        for width in widths or [None]:
+            for dark in themes if themes is not None else [None]:
+                variant = dict(entry)
+                if width is not None:
+                    variant["width"] = width
+                if dark is not None:
+                    variant["dark"] = dark
+                expanded.append((variant, group_defaults))
+    return expanded
 
 
 def resolve(entry, key, group_defaults, cli_value, global_value, default):
@@ -274,7 +387,11 @@ def resolve(entry, key, group_defaults, cli_value, global_value, default):
 def build_command(
     screenshot_script, entry, group_defaults, output_path, args, globals_dict
 ):
-    """Build the argv to invoke the single-page `screenshot` tool for one entry."""
+    """Build the argv to invoke the single-page `screenshot` tool for one entry.
+
+    Returns (argv, meta) where meta carries the resolved values the caller needs
+    to name the output file for this matrix cell.
+    """
     gd = group_defaults
     dark = resolve(
         entry, "dark", gd, True if args.dark else None, globals_dict.get("dark"), False
@@ -315,6 +432,17 @@ def build_command(
     selector = resolve(
         entry, "selector", gd, args.selector, globals_dict.get("selector"), None
     )
+    dpr = resolve(entry, "dpr", gd, args.dpr, globals_dict.get("dpr"), None)
+    scroll = resolve(entry, "scroll", gd, args.scroll, globals_dict.get("scroll"), None)
+    ready_selector = resolve(
+        entry,
+        "ready_selector",
+        gd,
+        args.ready_selector,
+        globals_dict.get("ready_selector"),
+        None,
+    )
+    squint = resolve(entry, "squint", gd, args.squint, globals_dict.get("squint"), None)
 
     # Invoke through `uv run --script` so the sibling resolves its OWN PEP 723
     # deps (playwright) — not this script's interpreter, which lacks them.
@@ -345,26 +473,84 @@ def build_command(
     # (they're mutually exclusive in the single-page tool). Without this, a
     # global `full_page: true` default plus `--selector` would emit both flags
     # and the child would reject every page.
-    if full_page and not selector:
+    if full_page and not selector and not scroll:
         cmd.append("--full-page")
     if no_auth:
         cmd.append("--no-auth")
     if selector:
         cmd.extend(["--selector", selector])
-    return cmd, bool(dark)
+    if dpr is not None:
+        cmd.extend(["--dpr", str(dpr)])
+    # A scroll position only means something for a real viewport shot, so it
+    # suppresses full_page above for the same reason a selector does.
+    if scroll:
+        cmd.extend(["--scroll", str(scroll)])
+    if ready_selector:
+        cmd.extend(["--ready-selector", ready_selector])
+    if squint is not None:
+        cmd.extend(["--squint", str(squint)])
+    if args.wait_until:
+        cmd.extend(["--wait-until", args.wait_until])
+    if args.sweep:
+        cmd.append("--sweep")
+        cmd.extend(["--sweep-json", str(Path(output_path).with_suffix(".sweep.json"))])
+        for key in SWEEP_PASSTHROUGH:
+            value = getattr(args, key, None)
+            if value is not None:
+                cmd.extend([f"--{key.replace('_', '-')}", str(value)])
+        for pair in args.sweep_pair or []:
+            cmd.extend(["--sweep-pair", pair])
+    return cmd, {"dark": bool(dark), "width": width, "scroll": scroll}
 
 
-def generate_index_html(output_dir, results):
+def read_sweeps(output_dir, results):
+    """Collect each captured cell's sweep findings into per-file counts."""
+    counts = {}
+    for _, filename, ok, _ in results:
+        if not ok or not filename:
+            continue
+        json_path = (output_dir / filename).with_suffix(".sweep.json")
+        if not json_path.exists():
+            continue
+        try:
+            findings = json.loads(json_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            # A missing or truncated sweep file must not sink the whole batch —
+            # the images are still the point, and the per-page tool already
+            # reported whatever went wrong on stderr.
+            continue
+        defects = sum(1 for f in findings if f.get("severity") == "defect")
+        counts[filename] = {
+            "defects": defects,
+            "leads": len(findings) - defects,
+            "total": len(findings),
+        }
+    return counts
+
+
+def generate_index_html(output_dir, results, sweeps=None):
     """Generate index.html with a responsive grid of all screenshots."""
+    sweeps = sweeps or {}
     cards = []
     for path, filename, ok, message in results:
         if ok and filename and (output_dir / filename).exists():
+            counts = sweeps.get(filename)
+            if counts is None:
+                badge = ""
+            elif counts["total"] == 0:
+                badge = '<span class="badge clean">sweep clean</span>'
+            else:
+                badge = (
+                    f'<span class="badge flagged">{counts["defects"]} defect'
+                    f" / {counts['leads']} lead</span>"
+                )
             cards.append(f"""
     <figure class="screenshot-card">
       <a href="{html.escape(filename)}" target="_blank">
         <img src="{html.escape(filename)}" alt="{html.escape(path)}" loading="lazy">
       </a>
-      <figcaption><code>{html.escape(path)}</code></figcaption>
+      <figcaption><code>{html.escape(path)}</code> {badge}<br>
+        <small class="cell">{html.escape(filename)}</small></figcaption>
     </figure>""")
         else:
             msg = html.escape(message or "Unknown error")
@@ -441,6 +627,16 @@ def generate_index_html(output_dir, results):
       font-size: 0.75rem;
       word-break: break-all;
     }}
+    .cell {{ color: #64748b; font-size: 0.75rem; }}
+    .badge {{
+      display: inline-block;
+      border-radius: 999px;
+      padding: 0.1rem 0.5rem;
+      font-size: 0.7rem;
+      vertical-align: middle;
+    }}
+    .badge.clean {{ background: #14342a; color: #4ade80; }}
+    .badge.flagged {{ background: #3a2a12; color: #fbbf24; }}
   </style>
 </head>
 <body>
@@ -511,7 +707,92 @@ def main():
         help="Auth URL template with {token} and {path} placeholders",
     )
     parser.add_argument(
+        "--dpr", type=float, default=None, help="Device pixel ratio for every page"
+    )
+    parser.add_argument(
+        "--scroll",
+        default=None,
+        help="Scroll before capturing every page: 'bottom', 'top', or a pixel offset",
+    )
+    parser.add_argument(
+        "--ready-selector",
+        default=None,
+        help="Wait for this selector on every page before capturing",
+    )
+    parser.add_argument(
+        "--squint",
+        type=float,
+        nargs="?",
+        const=7.0,
+        default=None,
+        metavar="RADIUS",
+        help="Blur every page by RADIUS px (default 7) — the grouping/rhythm test",
+    )
+    parser.add_argument(
+        "--wait-until",
+        choices=("load", "domcontentloaded", "networkidle", "commit"),
+        default=None,
+        help="Navigation wait condition for every page (default: the single-page "
+        "tool's own default)",
+    )
+    parser.add_argument(
         "--workers", type=int, default=4, help="Parallel browser workers (default: 4)"
+    )
+
+    matrix = parser.add_argument_group(
+        "review matrix",
+        "Cross every selected page with these axes. Scope the matrix to the axis "
+        "the change actually affects rather than running the full cross-product.",
+    )
+    matrix.add_argument(
+        "--widths",
+        default=None,
+        metavar="W1,W2",
+        help="Capture every page at each width, e.g. '390,767,768,1280'. Prefer "
+        "CSS breakpoint boundaries (767 AND 768) over representatives — a layout "
+        "fails on the far side of a breakpoint, not in the middle of a range.",
+    )
+    matrix.add_argument(
+        "--themes",
+        default=None,
+        metavar="light,dark",
+        help="Capture every page in each theme. Contrast, borders and images "
+        "routinely break in one theme while the other looks fine.",
+    )
+
+    sweep = parser.add_argument_group(
+        "measurement sweep",
+        "Measure every cell instead of eyeballing it. Findings are written next "
+        "to each image as <name>.sweep.json and summarised per cell.",
+    )
+    sweep.add_argument(
+        "--sweep", action="store_true", help="Run the measurement sweep on every page"
+    )
+    sweep.add_argument("--sweep-rows", default=None, help="List container selector")
+    sweep.add_argument(
+        "--sweep-align", default=None, help="Inner element whose edges should align"
+    )
+    sweep.add_argument(
+        "--sweep-full-width",
+        default=None,
+        help="Elements meant to span their container",
+    )
+    sweep.add_argument("--sweep-fixed", default=None, help="Fixed/sticky bar selector")
+    sweep.add_argument(
+        "--sweep-content", default=None, help="Primary block on a sparse screen"
+    )
+    sweep.add_argument(
+        "--sweep-pair",
+        action="append",
+        default=None,
+        metavar="A,B",
+        help="Two selectors that should share a left edge (repeatable)",
+    )
+    sweep.add_argument(
+        "--sweep-tolerance",
+        type=float,
+        default=None,
+        help="Sub-pixel tolerance in CSS px",
     )
     parser.add_argument(
         "--group",
@@ -621,6 +902,18 @@ def main():
             )
             sys.exit(1)
 
+    # --- Expand the review matrix ------------------------------------------
+    widths = parse_widths(args.widths)
+    themes = parse_themes(args.themes)
+    if widths or themes:
+        selection = expand_matrix(selection, widths, themes)
+        axes = []
+        if widths:
+            axes.append(f"{len(widths)} width(s)")
+        if themes:
+            axes.append(f"{len(themes)} theme(s)")
+        print(f"Matrix: {' x '.join(axes)} -> {len(selection)} cell(s) before dedup.")
+
     # --- Server preflight (fail fast before spawning workers) --------------
     host = args.host
     port = (
@@ -642,11 +935,17 @@ def main():
     jobs = []  # (index, path, filename, cmd)
     seen = set()  # dedup overlapping paths across selected groups, by output filename
     for entry, gdefaults in selection:
-        # Peek dark to name the file; build_command returns the authoritative value.
-        _, dark = build_command(
+        # Resolve first to name the file; the naming inputs (theme, width, scroll)
+        # all sit behind the same precedence chain the command itself uses.
+        _, meta = build_command(
             screenshot_script, entry, gdefaults, Path("placeholder"), args, globals_dict
         )
-        filename = path_to_filename(entry["path"], dark)
+        filename = path_to_filename(
+            entry["path"],
+            meta["dark"],
+            width=meta["width"] if widths else None,
+            scroll=meta["scroll"],
+        )
         if filename in seen:
             continue
         seen.add(filename)
@@ -688,12 +987,35 @@ def main():
             results[idx] = result
 
     # --- Index + summary ----------------------------------------------------
+    sweeps = read_sweeps(output_dir, results) if args.sweep else {}
+
     print("\nGenerating index.html...")
-    index_path = generate_index_html(output_dir, results)
+    index_path = generate_index_html(output_dir, results, sweeps)
 
     success = sum(1 for _, _, ok, _ in results if ok)
     total = len(results)
     print(f"\nDone! {success}/{total} screenshots captured.")
+
+    if args.sweep:
+        print("\nMeasurement sweep, worst cells first:")
+        ranked = sorted(
+            sweeps.items(), key=lambda kv: (-kv[1]["defects"], -kv[1]["leads"])
+        )
+        for filename, counts in ranked:
+            verdict = (
+                f"{counts['defects']} defect(s), {counts['leads']} lead(s)"
+                if counts["total"]
+                else "clean"
+            )
+            print(f"  {filename}: {verdict}")
+        flagged = sum(1 for c in sweeps.values() if c["defects"])
+        if flagged:
+            print(
+                f"\n{flagged} cell(s) have measured defects. Read the matching "
+                f"<name>.sweep.json for the numbers, then look at the image to "
+                f"confirm what each one means."
+            )
+
     print(f"Index: {index_path}")
     print(f"Open:  xdg-open '{index_path}' 2>/dev/null || open '{index_path}'")
 

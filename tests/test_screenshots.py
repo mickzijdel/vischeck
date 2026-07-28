@@ -43,6 +43,14 @@ def make_args(mod, **overrides):
         host=mod.DEFAULT_HOST,
         wait=mod.DEFAULT_WAIT_MS,
         selector=None,
+        dpr=None,
+        scroll=None,
+        ready_selector=None,
+        squint=None,
+        wait_until=None,
+        sweep=False,
+        sweep_pair=None,
+        **{key: None for key in mod.SWEEP_PASSTHROUGH},
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -280,7 +288,115 @@ def test_resolve_falls_back_to_default(mod):
     assert mod.resolve({}, "k", {}, None, None, "def") == "def"
 
 
-# --- path_to_filename(path, dark) ---
+# --- Matrix passthrough flags reach the per-page command ---
+
+
+def test_dpr_reaches_the_child_command(mod):
+    cmd, _ = build(mod, entry={"path": "/"}, args_overrides={"dpr": 2.0})
+    assert cmd[cmd.index("--dpr") + 1] == "2.0"
+
+
+def test_per_entry_dpr_beats_cli(mod):
+    cmd, _ = build(mod, entry={"path": "/", "dpr": 3}, args_overrides={"dpr": 2.0})
+    assert cmd[cmd.index("--dpr") + 1] == "3"
+
+
+def test_scroll_suppresses_full_page(mod):
+    """A scroll position is only meaningful for a real viewport shot; --full-page
+    stitches the whole document and would silently discard it."""
+    cmd, meta = build(
+        mod,
+        entry={"path": "/"},
+        args_overrides={"scroll": "bottom"},
+        globals_dict={"full_page": True},
+    )
+    assert "--full-page" not in cmd
+    assert cmd[cmd.index("--scroll") + 1] == "bottom"
+    assert meta["scroll"] == "bottom"
+
+
+def test_sweep_adds_flag_and_json_sidecar(mod):
+    cmd, _ = build(
+        mod,
+        entry={"path": "/"},
+        args_overrides={"sweep": True, "sweep_rows": ".row"},
+    )
+    assert "--sweep" in cmd
+    assert cmd[cmd.index("--sweep-rows") + 1] == ".row"
+    assert cmd[cmd.index("--sweep-json") + 1] == "/tmp/out.sweep.json"
+
+
+def test_sweep_flags_absent_without_sweep(mod):
+    cmd, _ = build(mod, entry={"path": "/"}, args_overrides={"sweep_rows": ".row"})
+    assert "--sweep" not in cmd
+    assert "--sweep-rows" not in cmd
+
+
+def test_sweep_pairs_are_repeated(mod):
+    cmd, _ = build(
+        mod,
+        entry={"path": "/"},
+        args_overrides={"sweep": True, "sweep_pair": [".a,.b", ".c,.d"]},
+    )
+    assert cmd.count("--sweep-pair") == 2
+
+
+# --- parse_widths / parse_themes ---
+
+
+def test_parse_widths_splits_and_ints(mod):
+    assert mod.parse_widths("390, 768,1280") == [390, 768, 1280]
+
+
+def test_parse_widths_none_when_unset(mod):
+    assert mod.parse_widths(None) is None
+
+
+def test_parse_widths_rejects_non_integer(mod):
+    with pytest.raises(SystemExit) as exc:
+        mod.parse_widths("390,wide")
+    assert exc.value.code == 1
+
+
+def test_parse_themes_maps_to_dark_flags(mod):
+    assert mod.parse_themes("light,dark") == [False, True]
+
+
+def test_parse_themes_rejects_unknown(mod):
+    with pytest.raises(SystemExit) as exc:
+        mod.parse_themes("light,sepia")
+    assert exc.value.code == 1
+
+
+# --- expand_matrix crosses pages with the width/theme axes ---
+
+
+def test_expand_matrix_is_identity_without_axes(mod):
+    selection = [({"path": "/"}, {})]
+    assert mod.expand_matrix(selection, None, None) == selection
+
+
+def test_expand_matrix_crosses_widths_and_themes(mod):
+    selection = [({"path": "/"}, {}), ({"path": "/news"}, {})]
+    out = mod.expand_matrix(selection, [390, 1280], [False, True])
+    assert len(out) == 8  # 2 pages x 2 widths x 2 themes
+    assert {(e["path"], e["width"], e["dark"]) for e, _ in out} == {
+        (p, w, d) for p in ("/", "/news") for w in (390, 1280) for d in (False, True)
+    }
+
+
+def test_expand_matrix_preserves_other_entry_keys(mod):
+    out = mod.expand_matrix([({"path": "/", "selector": ".card"}, {})], [390], None)
+    assert out[0][0]["selector"] == ".card"
+
+
+def test_expand_matrix_does_not_mutate_the_source_entry(mod):
+    entry = {"path": "/"}
+    mod.expand_matrix([(entry, {})], [390, 1280], None)
+    assert entry == {"path": "/"}
+
+
+# --- path_to_filename(path, dark, width, scroll) ---
 
 
 def test_path_to_filename_home(mod):
@@ -293,6 +409,24 @@ def test_path_to_filename_nested(mod):
 
 def test_path_to_filename_dark_suffix(mod):
     assert mod.path_to_filename("/shows", dark=True) == "shows_dark.png"
+
+
+def test_path_to_filename_includes_width_and_scroll(mod):
+    assert (
+        mod.path_to_filename("/shows", dark=True, width=390, scroll="bottom")
+        == "shows_w390_dark_scroll-bottom.png"
+    )
+
+
+def test_matrix_cells_get_distinct_filenames(mod):
+    """Every varying axis must reach the filename, or one cell overwrites another
+    and the batch reports coverage it doesn't have."""
+    names = {
+        mod.path_to_filename("/shows", dark=dark, width=width)
+        for width in (390, 1280)
+        for dark in (False, True)
+    }
+    assert len(names) == 4
 
 
 # --- Driving main() for dedup + CLI selection (no live server needed) ---
