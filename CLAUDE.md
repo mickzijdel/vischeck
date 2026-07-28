@@ -29,3 +29,33 @@ No glob tweaks needed when adding a new `bin/` script.
 deps unpinned (latest via `uv`): `bin/screenshot` → Playwright, `bin/screenshots` → PyYAML.
 Dev toolchain versions are pinned in `mise.lock`. Keep this list and README's "Built with" in
 sync with `mise.lock` / the scripts' PEP 723 blocks when they change.
+
+## The measurement sweep
+
+`bin/screenshot --sweep` injects `SWEEP_JS` into the page and reports numeric layout
+violations. Two invariants to preserve when touching it:
+
+1. **Every check emitted by `SWEEP_JS` needs an entry in `SWEEP_HINTS`,** and vice versa.
+   `tests/test_screenshot.py` greps the JS for `check: '...'` and asserts the two sets match
+   exactly, so a renamed check fails the suite rather than printing a bare key.
+2. **Severity is not cosmetic.** A check driven by a caller-supplied selector emits
+   `severity: 'defect'` (the intended layout was declared, so the number is a verdict);
+   an auto-detected or inherently ambiguous one emits `'lead'` (confirm by eye first).
+   New checks must pick one deliberately — grading everything `defect` is what turns a
+   useful report into noise that gets ignored.
+
+The sweep is verified against the fixtures in
+[HartreeWorks/skill--visual-review](https://github.com/HartreeWorks/skill--visual-review)
+(`test-fixtures/`, with a ground-truth `GRADING-KEY.md` of ten planted defects). Serve that
+directory over HTTP and sweep it after changing `SWEEP_JS`:
+
+```bash
+cd <fixtures>; python3 -m http.server 8899 &
+screenshot /podcasts.html --port 8899 --no-auth --width 390 --height 640 --scroll bottom \
+  --sweep --sweep-rows ".list" --sweep-full-width ".progwrap" --sweep-pair ".section-head,.row"
+screenshot /settings.html --port 8899 --no-auth --width 390 --height 844 \
+  --sweep --sweep-rows ".card" --sweep-align ".label"
+```
+
+All ten defects (P1–P6, S1–S4) must still be reported. Two of them only appear at a **short**
+viewport scrolled to the bottom — a regression there is invisible at the default size.

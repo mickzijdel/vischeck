@@ -79,3 +79,21 @@ def test_component_tsx_fires():
 
 def test_plain_yml_is_silent():
     assert run_hook("config/deploy.yml") == ""
+
+
+# --- The reminder points at both skills and at measuring rather than eyeballing ---
+
+
+def test_reminder_mentions_the_sweep():
+    assert "--sweep" in run_hook("app/views/home/index.html.erb")
+
+
+def test_reminder_offers_the_full_review_for_larger_changes():
+    assert "vischeck:review" in run_hook("app/views/home/index.html.erb")
+
+
+def test_reminder_is_valid_json():
+    """Malformed hook output is dropped silently by the harness, so the reminder
+    would vanish without any error to notice."""
+    payload = json.loads(run_hook("app/views/home/index.html.erb"))
+    assert payload["hookSpecificOutput"]["hookEventName"] == "PostToolUse"

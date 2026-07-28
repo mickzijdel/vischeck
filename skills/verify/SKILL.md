@@ -1,18 +1,49 @@
 ---
 name: verify
-description: Visually verify UI changes by taking authenticated screenshots of the local dev server. Use after editing any view, template, component, or layout file. If screenshot redirects to a login page, invoke vischeck:setup-auth first.
+description: Visually verify UI changes by taking authenticated screenshots of the local dev server, with a measurement sweep for what shouldn't be eyeballed. Use after editing any view, template, component, or layout file. For non-trivial UI work spanning several screens, breakpoints, or states, use vischeck:review instead. If screenshot redirects to a login page, invoke vischeck:setup-auth first.
 ---
 
 # vischeck:verify
 
 Use the `screenshot` CLI to visually verify UI changes against a running dev server. Always Read the saved image after taking a screenshot — then **review it like a critical designer, not a rubber stamp.**
 
+This is the fast pass for one edit. When the change touches several screens, crosses a breakpoint, or
+lands in a shared component that renders in many places, invoke `Skill(vischeck:review)` instead — it
+builds a proper coverage matrix and a ledger to prove it.
+
 ## When to use
 
 After editing any view, template, component, or layout file:
-1. Take a screenshot and Read the image
+1. Take a screenshot **with `--sweep`**, and Read the image
 2. **Judge it against the rubric below — this is the point of the skill, not an afterthought**
 3. For interactive elements (forms, buttons, inputs), also test the interaction with playwright-cli
+
+## Measure first, then look
+
+Half of what goes wrong is arithmetic, and arithmetic done by eye is where a 12px error survives a
+confident "looks good". `--sweep` measures the rendered layout and hands you a short list of numbers,
+so your attention goes to what code can't judge:
+
+```bash
+screenshot /signup --sweep                      # zero-config checks
+screenshot /signup --sweep --sweep-rows ".user-list" --sweep-align ".label" \
+                           --sweep-content ".signup-form"   # named intent → verdicts
+```
+
+It catches what a screenshot cannot show you: sub-44px tap targets, `overflow: hidden` swallowing
+text, a row that indents because it lacks an icon, a bar stopping short of its container, a page
+scrolling sideways, a form card sitting 90px too high in its space.
+
+Findings are graded. A **defect** was measured against a selector you named, so the number is a
+verdict. A **lead** was auto-detected or is ambiguous — confirm it in the image before reporting it.
+Naming selectors is what turns leads into verdicts.
+
+Anything fixed or sticky needs a real viewport at a real scroll position — `--full-page` cannot
+reproduce a bar covering the last row:
+
+```bash
+screenshot /feed --width 390 --height 640 --scroll bottom --sweep
+```
 
 ## How to judge the screenshot (do not skip)
 
@@ -23,10 +54,11 @@ cards, low-contrast text) look fine at a glance and are exactly what this step e
 Work in this order, and write down what you observe **before** giving any verdict:
 
 **1. Zoom in.** A full-page shot is too small to judge detail — borders, contrast, and spacing get
-lost. Take a focused shot of the component you just changed and Read that too:
+lost, and a 12px gap disappears entirely once the image is downscaled to a thumbnail. Take a focused
+shot of the component you just changed, at 2x, and Read that too:
 
 ```bash
-screenshot /signup --selector ".signup-form"   # just the thing you changed
+screenshot /signup --selector ".signup-form" --dpr 2   # just the thing you changed
 ```
 
 **2. Compare against the house style.** You cannot know what "correct" looks like from one screenshot
@@ -44,12 +76,13 @@ padding, font, size, and color as the established pattern? Any divergence is a f
 
 - **House-style conformance** — inputs / buttons / cards match the existing components (step 2)
 - **Contrast & legibility** — text reads clearly against its background; flag grey-on-grey, low-contrast placeholder/label text, text over busy backgrounds
-- **Spacing & alignment** — consistent padding/margins; edges line up; nothing crammed against a border
+- **Spacing & alignment** — consistent padding/margins; edges line up; nothing crammed against a border. The sweep measures the edges; you judge the rhythm
+- **Grouping** — related elements tight, generous space *between* groups. Squint at it: `screenshot /signup --squint` blurs the page, and related elements should merge into one blob while unrelated ones stay separate. A heading floating as its own blob above the cluster it belongs to is a grouping defect
 - **Clutter & density** — is the card/section overcrowded? Is there a clear visual hierarchy, or does everything compete?
 - **Typography** — font family / size / weight consistent with the rest of the app
-- **Truncation / overflow** — no clipped text, broken wrapping, unexpected scrollbars, or elements spilling out
+- **Truncation / overflow** — no clipped text, broken wrapping, unexpected scrollbars, or elements spilling out (the sweep flags the measurable half as `content-clipped` / `horizontal-overflow`)
 - **States** (where relevant) — focus, hover, disabled, error — exercise them with playwright-cli, don't assume
-- **Responsive** — for layout changes, also take a mobile shot (`--width 375 --height 812`)
+- **Responsive** — for layout changes, also take a mobile shot (`--width 375 --height 812`). If the change crosses a CSS breakpoint, shoot **both sides of it** (767 *and* 768) — layouts fail on the far side, not in the middle of a range
 
 **4. Report findings, then verdict.** List each problem tagged **blocker** (broken/unusable),
 **should-fix** (clearly off-style or sloppy), or **nit** (minor polish). Only after you have walked the
@@ -83,6 +116,15 @@ Define reusable **groups** in `screenshots.yml` (e.g. `smoke`, `admin`, `users`)
 with `screenshots --list`. A group can carry group-level defaults (e.g. a whole `admin` group `dark:
 true`). This lets you keep coherent, named slices to re-screenshot while iterating on a section.
 
+`--widths` and `--themes` cross the selected pages with those axes, so one command covers a whole
+matrix and names each file after its cell:
+
+```bash
+screenshots --group smoke --widths 390,767,768,1280 --themes light,dark --sweep
+```
+
+Each cell gets a `<name>.sweep.json` next to its PNG, and the summary ranks the worst cells first.
+
 ## Dark / light mode
 
 Check this project's CLAUDE.md for any mention of dark mode or light mode:
@@ -97,9 +139,22 @@ screenshot /path --dark                    # dark color scheme
 screenshot /path --width 375 --height 812  # mobile viewport
 screenshot /path --full-page               # full scrollable page
 screenshot /path --selector ".card"        # just one element, for close inspection
+screenshot /path --selector ".card" --dpr 2  # ...at 2x, where hairlines and small gaps resolve
+screenshot /path --scroll bottom           # real viewport at the bottom of the scroll
+screenshot /path --squint                  # blurred, for the grouping/rhythm test
+screenshot /path --ready-selector ".loaded" # wait for a postcondition, not a fixed timeout
 screenshot /path --port 8080               # custom port (overrides $PORT)
 screenshot /path --no-auth                 # skip authentication (public pages)
 screenshot /path --auth-url "/login?token={token}&next={path}"  # custom auth URL template
+
+screenshot /path --sweep                   # measure the layout; report numeric violations
+screenshot /path --sweep --sweep-rows ".list"          # ...name the list containers
+screenshot /path --sweep --sweep-align ".label"        # ...the edge that should stay constant
+screenshot /path --sweep --sweep-full-width ".bar"     # ...what should span its container
+screenshot /path --sweep --sweep-fixed ".mini-player"  # ...which bars can cover content
+screenshot /path --sweep --sweep-content ".login-card" # ...the block that should be centred
+screenshot /path --sweep --sweep-pair ".breadcrumb,.artwork"  # ...two edges that should match
+screenshot /path --sweep --sweep-json out.json         # ...also save the raw findings
 
 screenshots / /dashboard /news             # batch: capture several paths at once
 screenshots                                # batch: use ./screenshots.yml
@@ -107,6 +162,9 @@ screenshots --dark                         # batch: dark scheme for all pages
 screenshots --group smoke                  # batch: capture a named group
 screenshots -g smoke,admin                 # batch: union of several groups
 screenshots / /login --selector ".form"    # batch: same element on each page
+screenshots --widths 390,768,1280          # batch: cross every page with these widths
+screenshots --themes light,dark            # batch: cross every page with both themes
+screenshots --sweep                        # batch: measure every cell, rank the worst
 screenshots --list                         # batch: list defined groups
 ```
 
