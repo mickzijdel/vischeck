@@ -1,7 +1,7 @@
 {
   "name": "vischeck",
   "description": "Visual verification for Claude Code — screenshot CLI with a DOM measurement sweep, a breakpoint/theme review matrix, a smart reminder hook, and a dev auth bypass pattern for any framework.",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "author": {
     "name": "Mick Zijdel"
   },

@@ -223,7 +223,7 @@ Tooling is managed with [mise](https://mise.jdx.dev) and pre-commit hooks run vi
 reproducibly (resolved versions + checksums) in the committed `mise.lock`.
 
 ```bash
-mise install     # provision hk, gitleaks, shellcheck, shfmt, uv, ruff, node
+mise install     # provision hk, gitleaks, shellcheck, shfmt, python, uv, ruff, node
 hk install       # install the git pre-commit hook (lint + secret-scan + dead-code/duplication)
 hk run check     # the same full suite under one name (what CI runs)
 uv run pytest    # run the test suite for the bundled scripts
