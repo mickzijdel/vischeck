@@ -45,10 +45,9 @@ reproduce a bar covering the last row:
 screenshot /feed --width 390 --height 640 --scroll bottom --sweep
 ```
 
-## How to judge the screenshot (do not skip)
+## How to judge the screenshot
 
-A bare verdict of "looks good" is a **failure of this skill**. Your default instinct will be to
-approve — resist it. UIs that are subtly wrong (inputs that don't match the house style, cluttered
+Give a verdict only after listing the checks you ran (step 4). UIs that are subtly wrong (inputs that don't match the house style, cluttered
 cards, low-contrast text) look fine at a glance and are exactly what this step exists to catch.
 
 Work in this order, and write down what you observe **before** giving any verdict:
