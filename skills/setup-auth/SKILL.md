@@ -13,7 +13,7 @@ Only proceed once the user confirms.
 
 ## What to implement
 
-A route at `/dev-auth/login?token=<token>&redirect_to=<path>` that:
+A route at `/dev_auth/login?token=<token>&redirect_to=<path>` that:
 1. Only activates in development/test mode
 2. Validates the token against the `DEV_AUTH_TOKEN` env var (default: `claude-screenshot-token`)
 3. Signs in a dev user (email: `claude-dev@localhost`)
@@ -81,7 +81,7 @@ def dev_login(request):
 ```python
 # urls.py — only register in debug mode
 if settings.DEBUG:
-    urlpatterns += [path("dev-auth/login", dev_login)]
+    urlpatterns += [path("dev_auth/login", dev_login)]
 ```
 
 Create the dev user: `python manage.py shell -c "from django.contrib.auth import get_user_model; User = get_user_model(); User.objects.get_or_create(email='claude-dev@localhost', defaults={'is_staff': True, 'is_superuser': True})"`
@@ -97,7 +97,7 @@ from myapp.models import User
 
 bp = Blueprint("dev_auth", __name__)
 
-@bp.route("/dev-auth/login")
+@bp.route("/dev_auth/login")
 def login():
     if not current_app.debug:
         abort(404)
@@ -121,7 +121,7 @@ from fastapi.responses import RedirectResponse
 
 router = APIRouter()
 
-@router.get("/dev-auth/login")
+@router.get("/dev_auth/login")
 async def dev_login(token: str, redirect_to: str = "/", request: Request = None):
     if os.environ.get("ENV", "development") != "development":
         raise HTTPException(404)
