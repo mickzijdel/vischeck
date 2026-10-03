@@ -52,9 +52,9 @@ cards, low-contrast text) look fine at a glance and are exactly what this step e
 
 Work in this order, and write down what you observe **before** giving any verdict:
 
-**1. Zoom in.** A full-page shot is too small to judge detail — borders, contrast, and spacing get
-lost, and a 12px gap disappears entirely once the image is downscaled to a thumbnail. Take a focused
-shot of the component you just changed, at 2x, and Read that too:
+**1. Zoom in on fine detail.** A 12px gap is plainly visible at native size and gone entirely once a
+full-page shot is downscaled to a thumbnail. For anything fine (hairlines, small gaps), also shoot the
+component you changed at `--dpr 2` and Read that too:
 
 ```bash
 screenshot /signup --selector ".signup-form" --dpr 2   # just the thing you changed
