@@ -1,6 +1,6 @@
 ---
 name: review
-description: Full visual review of non-trivial UI work — a scoped breakpoint/state/theme matrix, a measurement sweep, a coverage ledger, and a defect report a fix agent can act on. Use after implementing or changing non-trivial product UI (a shared component, a layout, a new screen) before reporting it done, and whenever the user asks for a visual review, visual QA, screenshot review, or polish pass. For a single-file tweak use vischeck:verify instead.
+description: Use after building or changing non-trivial UI (a shared component, a layout, a new screen) before calling it done, and whenever the user asks for a visual review, visual QA, screenshot review or polish pass. For a one-file tweak use vischeck:verify.
 ---
 
 # vischeck:review

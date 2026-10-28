@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Visually verify UI changes by taking authenticated screenshots of the local dev server, with a measurement sweep for what shouldn't be eyeballed. Use after editing any view, template, component, or layout file. For non-trivial UI work spanning several screens, breakpoints, or states, use vischeck:review instead. If screenshot redirects to a login page, invoke vischeck:setup-auth first.
+description: Use after editing any view, template, component or layout file, to screenshot the local dev server and measure what shouldn't be eyeballed. For work across several screens, breakpoints or states use vischeck:review.
 ---
 
 # vischeck:verify
