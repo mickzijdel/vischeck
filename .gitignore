@@ -6,3 +6,4 @@ __pycache__/
 # machine-local mise overrides (mise.toml + mise.lock ARE committed)
 mise.local.toml
 .worktrees/
+.claude/worktrees/
