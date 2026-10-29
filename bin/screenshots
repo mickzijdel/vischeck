@@ -922,7 +922,7 @@ def main():
     try:
         sock = socket.create_connection((host, port), timeout=2)
         sock.close()
-    except (socket.timeout, ConnectionRefusedError, OSError):
+    except (TimeoutError, ConnectionRefusedError, OSError):
         print(f"\nERROR: Dev server not running on {host}:{port}", file=sys.stderr)
         sys.exit(1)
 
@@ -967,7 +967,7 @@ def main():
         idx, path, filename, cmd = job
         with lock:
             print(f"  [{idx + 1}/{len(jobs)}] Capturing {path} ...")
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
         ok = proc.returncode == 0
         # The single tool prints diagnostics to stderr; surface the last line.
         stderr = proc.stderr.strip()

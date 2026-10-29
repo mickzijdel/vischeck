@@ -342,8 +342,10 @@ def format_sweep(findings, width, height):
     defects = [f for f in findings if f.get("severity") == "defect"]
     leads = [f for f in findings if f.get("severity") != "defect"]
     lines = [
-        f"SWEEP {len(findings)} finding(s) at {width}x{height} — "
-        f"{len(defects)} defect(s), {len(leads)} lead(s) to confirm visually."
+        (
+            f"SWEEP {len(findings)} finding(s) at {width}x{height} — "
+            f"{len(defects)} defect(s), {len(leads)} lead(s) to confirm visually."
+        )
     ]
     for finding in defects + leads:
         check = finding.get("check", "?")
@@ -367,7 +369,7 @@ def check_server(host, port):
         sock = socket.create_connection((host, port), timeout=2)
         sock.close()
         return True
-    except (socket.timeout, ConnectionRefusedError, OSError):
+    except (TimeoutError, ConnectionRefusedError, OSError):
         return False
 
 
@@ -419,7 +421,7 @@ def settle(page, ready_selector, wait_ms):
     if ready_selector:
         try:
             page.locator(ready_selector).first.wait_for(state="visible", timeout=10000)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - any failure means not ready
             problem = (
                 f"ready selector {ready_selector!r} never became visible "
                 f"({type(e).__name__}) — the page may not have reached the state "
@@ -427,7 +429,7 @@ def settle(page, ready_selector, wait_ms):
             )
     try:
         page.evaluate("() => document.fonts && document.fonts.ready")
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 - fonts API is optional
         pass  # Font Loading API is optional; a missing one is not a capture failure.
     page.wait_for_timeout(wait_ms)
     return problem
@@ -777,7 +779,7 @@ def main():
                             file=sys.stderr,
                         )
                         exit_code = 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - any navigation failure ends the run
             print(f"ERROR: Navigation failed: {e}", file=sys.stderr)
             browser.close()
             sys.exit(1)
@@ -806,7 +808,7 @@ def main():
         if args.sweep:
             try:
                 run_sweep(page, args)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - a failed sweep keeps the screenshot
                 print(
                     f"ERROR: measurement sweep failed ({type(e).__name__}: {e}) — "
                     f"the screenshot itself is still valid.",
@@ -827,7 +829,7 @@ def main():
             try:
                 locator.wait_for(state="visible", timeout=3000)
                 locator.screenshot(path=str(output_path))
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - fall back to a viewport shot
                 # Fall back to a full-viewport shot so there's something to inspect,
                 # but never report success — the requested element wasn't captured.
                 page.screenshot(path=str(output_path))

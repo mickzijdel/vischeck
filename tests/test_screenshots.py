@@ -168,7 +168,7 @@ def write_config(tmp_path, text):
 
 def test_load_config_pages_only(mod, tmp_path):
     path = write_config(tmp_path, "pages:\n  - /\n  - /news\n")
-    globals_dict, default_entries, groups = mod.load_config(path)
+    _globals_dict, default_entries, groups = mod.load_config(path)
     assert default_entries == [{"path": "/"}, {"path": "/news"}]
     assert groups == {}
 
@@ -176,7 +176,7 @@ def test_load_config_pages_only(mod, tmp_path):
 def test_load_config_groups_only_no_error(mod, tmp_path):
     # Regression guard: the pre-groups version errored when `pages:` was absent.
     path = write_config(tmp_path, "groups:\n  smoke:\n    - /\n    - /shows\n")
-    globals_dict, default_entries, groups = mod.load_config(path)
+    _globals_dict, default_entries, groups = mod.load_config(path)
     assert default_entries is None
     assert "smoke" in groups
     assert groups["smoke"]["entries"] == [{"path": "/"}, {"path": "/shows"}]
@@ -184,7 +184,7 @@ def test_load_config_groups_only_no_error(mod, tmp_path):
 
 def test_load_config_both_pages_and_groups(mod, tmp_path):
     path = write_config(tmp_path, "pages:\n  - /\ngroups:\n  smoke:\n    - /shows\n")
-    globals_dict, default_entries, groups = mod.load_config(path)
+    _globals_dict, default_entries, groups = mod.load_config(path)
     assert default_entries == [{"path": "/"}]
     assert "smoke" in groups
 

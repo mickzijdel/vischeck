@@ -10,8 +10,9 @@ Bump the plugin version on every commit. Patch version for small fixes, minor ve
 
 # Development
 
-Tooling is managed by **mise** + **hk** (dev-hooks:dev-env-setup standard v26). Tools are
-spec'd `"latest"` in `mise.toml` and pinned in the committed `mise.lock`.
+Tooling is managed by **mise** + **hk** (dev-hooks:dev-env-setup standard v30). Tools are
+spec'd `"latest"` in `mise.toml` (ruff pinned to its 0.17 minor, as uv's ruff is) and pinned
+in the committed `mise.lock`.
 
 - `mise install` — provision the toolchain (hk, gitleaks, shellcheck, shfmt, python, uv, ruff, node). `uv run` uses mise's Python (the `UV_PYTHON_*` settings in `mise.toml` [env]), and CI installs the same locked release via mise-action.
 - `hk install` — install the git pre-commit hook (runs the linters + gitleaks + large-file check,

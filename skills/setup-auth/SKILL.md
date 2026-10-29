@@ -66,6 +66,7 @@ from django.contrib.auth import get_user_model, login
 from django.http import HttpResponseForbidden
 from django.shortcuts import redirect
 
+
 def dev_login(request):
     if not settings.DEBUG:
         return HttpResponseForbidden()
@@ -97,6 +98,7 @@ from myapp.models import User
 
 bp = Blueprint("dev_auth", __name__)
 
+
 @bp.route("/dev_auth/login")
 def login():
     if not current_app.debug:
@@ -120,6 +122,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 router = APIRouter()
+
 
 @router.get("/dev_auth/login")
 async def dev_login(token: str, redirect_to: str = "/", request: Request = None):
